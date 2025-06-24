@@ -34,3 +34,15 @@ The examples/ directory contains example sketches from the manufacturer showing 
 - Device shows pregnancy progress on every boot/reboot, not just alarm wake-ups
 - Week calculation: based on days since LMP start date divided by 7 (no +1 offset)
 - Pregnancy duration: 280 days total (40 weeks)
+
+## Compile and Upload
+
+You can use the arduino-cli tool to compile, add libraries and upload new firmware.
+
+Compile:
+
+    arduino-cli compile --fqbn Inkplate_Boards:esp32:Inkplate2
+
+Upload:
+
+   arduino-cli upload -p /dev/ttyUSB0 --fqbn Inkplate_Boards:esp32:Inkplate2 

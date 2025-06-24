@@ -28,11 +28,11 @@ Network network;
 RTC rtc;
 
 // WiFi credentials - update these
-char ssid[] = "Ravenclaw Tower";
-char pass[] = "chickenbutt";
+char ssid[] = "Placeholder";
+char pass[] = "daylilies2024";
 
 // Timezone adjustment (1 means UTC+1)
-int timeZone = -4;
+int timeZone = -3;
 
 // Pregnancy configuration - update these dates
 struct tm dueDate = {0};      // Due date
