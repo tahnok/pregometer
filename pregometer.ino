@@ -22,6 +22,10 @@
 #include "Network.h"
 #include "RTC.h"
 #include <time.h>
+#include "FreeSans9pt7b.h"
+#include "FreeSans12pt7b.h"
+#include "FreeSans18pt7b.h"
+#include "FreeSansBold24pt7b.h"
 
 Inkplate display;
 Network network; 
@@ -165,30 +169,33 @@ void showPregnancyProgress() {
 }
 
 void displayPregnancyInfo(int daysRemaining, int currentWeek, int currentTrimester, float percentComplete) {
-    // Left column - Days remaining (large)
-    display.setCursor(5, 5);
-    display.setTextSize(3);
+    // Left column - Days remaining (large with bold font)
+    display.setFont(&FreeSansBold24pt7b);
+    display.setCursor(5, 39);
     display.printf("%d", daysRemaining);
     
-    display.setCursor(5, 30);
-    display.setTextSize(1);
+    // Center "days left" under the number
+    display.setFont(&FreeSans9pt7b);
+    display.setCursor(15, 54);
     display.println("days left");
     
-    // Right column - Week info
-    display.setCursor(120, 5);
-    display.setTextSize(2);
+    // Right column - Week info (moved left to avoid clipping)
+    display.setFont(&FreeSans12pt7b);
+    display.setCursor(100, 25);
     display.printf("Week %d", currentWeek);
     
-    display.setCursor(120, 25);
-    display.setTextSize(1);
+    // Trimester info
+    display.setFont(&FreeSans9pt7b);
+    display.setCursor(100, 40);
     display.printf("Trimester %d", currentTrimester);
+    
 }
 
 void displayProgressBar(float percentComplete) {
-    int barWidth = 180;
-    int barHeight = 20;
+    int barWidth = 198;  // Fill almost the entire screen width (212px - 14px margins)
+    int barHeight = 30;  // Make it taller
     int barX = 5;
-    int barY = 60;
+    int barY = 70;       // Move it down
     
     // Draw progress bar outline
     display.drawRect(barX, barY, barWidth, barHeight, INKPLATE2_BLACK);
@@ -199,22 +206,22 @@ void displayProgressBar(float percentComplete) {
         display.fillRect(barX + 1, barY + 1, fillWidth, barHeight - 2, INKPLATE2_BLACK);
     }
     
-    // Add percentage text inside bar
-    display.setTextColor(INKPLATE2_BLACK);
-    display.setCursor(barX + barWidth/2 - 15, barY + 7);
-    display.setTextSize(1);
+    // Add percentage text inside bar - position and color based on fill level
+    display.setFont(&FreeSans9pt7b);
+    if (percentComplete < 50.0) {
+        // Less than 50% filled - use black text, right-aligned in unfilled area
+        display.setTextColor(INKPLATE2_BLACK);
+        display.setCursor(barX + barWidth - 40, barY + 20);  // Right side of bar
+    } else {
+        // More than 50% filled - use white text, left-aligned in filled area
+        display.setTextColor(INKPLATE2_WHITE);
+        display.setCursor(barX + 10, barY + 20);  // Left side of bar
+    }
     display.printf("%.0f%%", percentComplete);
 }
 
 void displayLastUpdate() {
-    display.setTextColor(INKPLATE2_BLACK);
-    display.setCursor(5, 90);
-    display.setTextSize(1);
-    display.printf("%02d/%02d %02d:%02d", 
-                   currentTime.tm_mon + 1, 
-                   currentTime.tm_mday,
-                   currentTime.tm_hour, 
-                   currentTime.tm_min);
+    // This function is now unused - timestamp moved to displayPregnancyInfo
 }
 
 int calculateDaysRemaining() {

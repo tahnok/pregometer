@@ -13,10 +13,11 @@ A pregnancy progress tracker that runs on the Inkplate2, an ESP32 connected to a
 ## Display Layout
 
 The 212x104 pixel landscape display shows:
-- **Left side**: Large days remaining number with "days left" below
-- **Right side**: Current week number with trimester information
-- **Middle**: Progress bar (180px × 20px) with percentage inside
-- **Bottom left**: Last update timestamp in MM/DD HH:MM format
+- **Left side**: Large days remaining number (bold 24pt font) with "days left" below
+- **Right side**: Current week number (12pt font) with trimester information (9pt font)
+- **Bottom**: Wide progress bar (198px × 30px) with smart percentage positioning
+  - Text appears in black on right when <50% filled
+  - Text appears in white on left when ≥50% filled
 
 ## Hardware Requirements
 
@@ -73,6 +74,43 @@ pregometer/
    - **Current week**: Based on days since LMP start date ÷ 7
    - **Trimester**: Week 1-12 (1st), 13-27 (2nd), 28+ (3rd)
    - **Progress**: Days passed ÷ 280 total pregnancy days × 100%
+
+## Fonts and Display
+
+The project uses custom fonts from the Inkplate library for better text appearance:
+
+- **FreeSansBold24pt7b**: Large days remaining number (professional, bold look)
+- **FreeSans12pt7b**: Week numbers (medium size, clear)
+- **FreeSans9pt7b**: Labels, percentage text, and timestamps (clean, readable)
+
+### Font Implementation Details
+
+Custom fonts are included by copying from the Inkplate library:
+```cpp
+#include "FreeSans9pt7b.h"
+#include "FreeSans12pt7b.h"
+#include "FreeSans18pt7b.h"
+#include "FreeSansBold24pt7b.h"
+```
+
+Font files are copied from: `/Arduino/libraries/InkplateLibrary/Fonts/`
+
+### Using Custom Fonts
+
+Custom fonts provide anti-aliased, professional appearance compared to scaled default fonts:
+
+```cpp
+display.setFont(&FreeSansBold24pt7b);  // Set custom font
+display.setCursor(5, 35);              // Position cursor (baseline positioning)
+display.printf("%d", daysRemaining);   // Print text
+```
+
+**Important Notes**:
+- Custom fonts use baseline positioning (different from default fonts)
+- Font files must be in the sketch directory or accessible via include path
+- Each font consumes program memory
+- Available fonts: FreeSans, FreeSerif, FreeMono in various sizes (9pt, 12pt, 18pt, 24pt)
+- Bold and oblique variants available
 
 ## Technical Notes
 
