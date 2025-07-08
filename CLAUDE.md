@@ -20,14 +20,27 @@ The examples/ directory contains example sketches from the manufacturer showing 
 - Bottom left: Last update timestamp
 
 ## Project Structure:
-- pregometer.ino - Main sketch file
+- pregometer.ino - Main sketch file with WiFiManager integration
 - Network.h/cpp - WiFi and NTP time synchronization
 - RTC.h/cpp - Real-time clock and deep sleep alarm functionality
 
-## Configuration needed:
-- WiFi credentials in ssid[] and pass[] variables
-- Pregnancy dates in dueDate and startDate structs
-- Timezone in timeZone variable
+## Dependencies:
+- WiFiManager library (tzapu/WiFiManager)
+- ArduinoJson library for configuration storage
+- SPIFFS for persistent configuration storage
+
+## Configuration:
+The device uses WiFiManager for configuration. On first boot or when pregnancy dates are not configured:
+
+1. Device creates "Pregometer-Setup" WiFi access point
+2. Connect to this WiFi and navigate to 192.168.4.1
+3. Configure WiFi credentials and pregnancy dates:
+   - Start Date: LMP date in YYYY-MM-DD format
+   - Due Date: Expected due date in YYYY-MM-DD format
+4. Configuration is saved to SPIFFS and persists across reboots
+
+Manual configuration in code (if needed):
+- Timezone in timeZone variable (default: -3 for UTC-3)
 
 ## Hardware notes:
 - No battery gauge available on this Inkplate2 hardware
@@ -39,10 +52,18 @@ The examples/ directory contains example sketches from the manufacturer showing 
 
 You can use the arduino-cli tool to compile, add libraries and upload new firmware.
 
+Install required libraries:
+
+    arduino-cli lib install WiFiManager ArduinoJson
+
 Compile:
 
     arduino-cli compile --fqbn Inkplate_Boards:esp32:Inkplate2
 
 Upload:
 
-   arduino-cli upload -p /dev/ttyUSB0 --fqbn Inkplate_Boards:esp32:Inkplate2 
+    arduino-cli upload -p /dev/ttyUSB0 --fqbn Inkplate_Boards:esp32:Inkplate2
+
+Monitor serial output:
+
+    arduino-cli monitor -p /dev/ttyUSB0 --fqbn Inkplate_Boards:esp32:Inkplate2 --config baudrate=115200 

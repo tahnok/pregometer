@@ -18,10 +18,15 @@
 #error "Wrong board selection for this example, please select Soldered Inkplate2 in the boards menu."
 #endif
 
+#include <WiFiManager.h>
+#define FS_NO_GLOBALS
+#include <FS.h>
+#include <SPIFFS.h>
+#include <ArduinoJson.h>
+#include <time.h>
 #include "Inkplate.h"
 #include "Network.h"
 #include "RTC.h"
-#include <time.h>
 #include "FreeSans9pt7b.h"
 #include "FreeSans12pt7b.h"
 #include "FreeSans18pt7b.h"
@@ -31,9 +36,10 @@ Inkplate display;
 Network network; 
 RTC rtc;
 
-// WiFi credentials - update these
-char ssid[] = "Placeholder";
-char pass[] = "daylilies2024";
+// Configuration variables
+char start_date[11] = "";  // Format: YYYY-MM-DD
+char due_date[11] = "";    // Format: YYYY-MM-DD
+bool shouldSaveConfig = false;
 
 // Timezone adjustment (1 means UTC+1)
 int timeZone = -3;
@@ -53,6 +59,127 @@ const int TOTAL_PREGNANCY_DAYS = 280;
 
 struct tm currentTime;
 
+void saveConfigCallback() {
+    Serial.println("Should save config");
+    shouldSaveConfig = true;
+}
+
+void loadConfig() {
+    Serial.println("mounting FS...");
+    if (SPIFFS.begin()) {
+        Serial.println("mounted file system");
+        if (SPIFFS.exists("/config.json")) {
+            Serial.println("reading config file");
+            fs::File configFile = SPIFFS.open("/config.json", "r");
+            if (configFile) {
+                Serial.println("opened config file");
+                size_t size = configFile.size();
+                std::unique_ptr<char[]> buf(new char[size]);
+                configFile.readBytes(buf.get(), size);
+                DynamicJsonDocument json(1024);
+                auto deserializeError = deserializeJson(json, buf.get());
+                if (!deserializeError) {
+                    Serial.println("parsed json");
+                    strcpy(start_date, json["start_date"]);
+                    strcpy(due_date, json["due_date"]);
+                } else {
+                    Serial.println("failed to load json config");
+                }
+                configFile.close();
+            }
+        }
+    } else {
+        Serial.println("failed to mount FS, formatting...");
+        if (SPIFFS.format()) {
+            Serial.println("SPIFFS formatted successfully");
+            if (SPIFFS.begin()) {
+                Serial.println("SPIFFS mounted after format");
+            } else {
+                Serial.println("SPIFFS mount failed even after format");
+            }
+        } else {
+            Serial.println("SPIFFS format failed");
+        }
+    }
+}
+
+void saveConfig() {
+    Serial.println("saving config");
+    DynamicJsonDocument json(1024);
+    json["start_date"] = start_date;
+    json["due_date"] = due_date;
+    
+    fs::File configFile = SPIFFS.open("/config.json", "w");
+    if (!configFile) {
+        Serial.println("failed to open config file for writing");
+    } else {
+        serializeJson(json, configFile);
+        configFile.close();
+        Serial.println("config saved");
+    }
+}
+
+void parseDateString(const char* dateStr, struct tm* date) {
+    int year, month, day;
+    sscanf(dateStr, "%d-%d-%d", &year, &month, &day);
+    date->tm_year = year - 1900;
+    date->tm_mon = month - 1;
+    date->tm_mday = day;
+}
+
+bool areDatesValid() {
+    return (strlen(start_date) == 10 && strlen(due_date) == 10 && 
+            start_date[4] == '-' && start_date[7] == '-' &&
+            due_date[4] == '-' && due_date[7] == '-');
+}
+
+void configureWiFiAndDates() {
+    // Configure WiFi using WiFiManager with custom parameters
+    WiFiManager wifiManager;
+    wifiManager.setSaveConfigCallback(saveConfigCallback);
+    
+    // Force configuration portal to open - don't use saved credentials
+    wifiManager.resetSettings();
+    
+    // Set timeout to give user more time to configure
+    wifiManager.setConfigPortalTimeout(300); // 5 minutes
+    
+    // Custom parameters for pregnancy dates
+    WiFiManagerParameter custom_start_date("start_date", "Start Date (YYYY-MM-DD)", start_date, 11);
+    WiFiManagerParameter custom_due_date("due_date", "Due Date (YYYY-MM-DD)", due_date, 11);
+    
+    // Add parameters to WiFiManager
+    wifiManager.addParameter(&custom_start_date);
+    wifiManager.addParameter(&custom_due_date);
+    
+    Serial.println("Starting WiFi configuration portal...");
+    Serial.println("Connect to 'Pregometer-Setup' WiFi and go to 192.168.4.1");
+    Serial.println("Enter your WiFi credentials and pregnancy dates");
+    
+    // Use startConfigPortal instead of autoConnect to force portal mode
+    if (!wifiManager.startConfigPortal("Pregometer-Setup")) {
+        Serial.println("Failed to connect or configure - will retry");
+        return; // Don't restart, just return and try again
+    }
+    
+    Serial.println("WiFi connected");
+    
+    // Get custom parameters
+    strcpy(start_date, custom_start_date.getValue());
+    strcpy(due_date, custom_due_date.getValue());
+    
+    // Log the configured dates
+    Serial.print("Start date: ");
+    Serial.println(start_date);
+    Serial.print("Due date: ");
+    Serial.println(due_date);
+    
+    // Save configuration if changed
+    if (shouldSaveConfig) {
+        saveConfig();
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     
@@ -60,23 +187,30 @@ void setup() {
     display.begin();
     display.clearDisplay();
     
-    // Set pregnancy dates - UPDATE THESE VALUES
-    // Due date example: March 15, 2025
-    dueDate.tm_year = 2025 - 1900;  // Year since 1900
-    dueDate.tm_mon = 12 - 1;         // Month (0-11)
-    dueDate.tm_mday = 2;           // Day of month
+    // Load configuration from SPIFFS
+    loadConfig();
     
-    // Start date example: June 8, 2024 (LMP)
-    startDate.tm_year = 2025 - 1900;
-    startDate.tm_mon = 2 - 1;
-    startDate.tm_mday = 25;
+    // Check if dates are configured properly
+    while (!areDatesValid()) {
+        Serial.println("Dates not configured, entering setup mode");
+        configureWiFiAndDates(); // Configure WiFi and dates first
+        // Check if dates are now valid
+        if (!areDatesValid()) {
+            Serial.println("Dates still not configured. Please connect to Pregometer-Setup WiFi and enter dates.");
+            delay(5000); // Wait 5 seconds before trying again
+        }
+    }
+    
+    // Parse date strings into tm structures
+    parseDateString(start_date, &startDate);
+    parseDateString(due_date, &dueDate);
+    Serial.println("Dates configured successfully!");
     
     // Check why device woke up
     if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER) {
         // First run - set up alarm for daily wake up
         setupDailyAlarm();
-                updatePregnancyDisplay();
-
+        updatePregnancyDisplay();
     } else {
         // Daily wake up - update display
         updatePregnancyDisplay();
@@ -88,8 +222,7 @@ void loop() {
 }
 
 void setupDailyAlarm() {
-    // Connect to WiFi and get current time
-    network.begin(ssid, pass);
+    // Get current time using existing network functions
     network.setTime(timeZone);
     network.getTime(&currentTime);
     
@@ -129,8 +262,8 @@ void setupDailyAlarm() {
 }
 
 void updatePregnancyDisplay() {
+    // WiFi should already be connected from previous setup
     // Get current time
-    network.begin(ssid, pass);
     network.setTime(timeZone);
     network.getTime(&currentTime);
     
