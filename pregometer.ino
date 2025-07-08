@@ -36,27 +36,20 @@ Inkplate display;
 Network network; 
 RTC rtc;
 
-// Configuration variables
-char start_date[11] = "";  // Format: YYYY-MM-DD
-char due_date[11] = "";    // Format: YYYY-MM-DD
-bool shouldSaveConfig = false;
-
-// Timezone adjustment (1 means UTC+1)
-int timeZone = -3;
-
-// Pregnancy configuration - update these dates
-struct tm dueDate = {0};      // Due date
-struct tm startDate = {0};    // Pregnancy start date (LMP)
-
-// Wake up time (7:00 AM)
+// Configuration constants
 const int WAKE_HOUR = 7;
 const int WAKE_MINUTE = 0;
-
-// No battery gauge on this hardware
-
-// Total pregnancy duration in days (280 days = 40 weeks)
 const int TOTAL_PREGNANCY_DAYS = 280;
+const int TIMEZONE_OFFSET = -3;
 
+// Configuration variables
+char start_date[11] = "";
+char due_date[11] = "";
+bool shouldSaveConfig = false;
+
+// Date structures
+struct tm dueDate = {0};
+struct tm startDate = {0};
 struct tm currentTime;
 
 void saveConfigCallback() {
@@ -182,39 +175,20 @@ void configureWiFiAndDates() {
 
 void setup() {
     Serial.begin(115200);
+    initializeDisplay();
     
-    // Initialize display
-    display.begin();
-    display.clearDisplay();
-    
-    // Load configuration from SPIFFS
-    loadConfig();
-    
-    // Check if dates are configured properly
-    while (!areDatesValid()) {
-        Serial.println("Dates not configured, entering setup mode");
-        configureWiFiAndDates(); // Configure WiFi and dates first
-        // Check if dates are now valid
-        if (!areDatesValid()) {
-            Serial.println("Dates still not configured. Please connect to Pregometer-Setup WiFi and enter dates.");
-            delay(5000); // Wait 5 seconds before trying again
-        }
+    if (!ensureDatesConfigured()) {
+        Serial.println("Failed to configure dates");
+        return;
     }
     
-    // Parse date strings into tm structures
-    parseDateString(start_date, &startDate);
-    parseDateString(due_date, &dueDate);
-    Serial.println("Dates configured successfully!");
+    parseDateStrings();
     
-    // Check why device woke up
-    if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER) {
-        // First run - set up alarm for daily wake up
+    if (isFirstRun()) {
         setupDailyAlarm();
-        updatePregnancyDisplay();
-    } else {
-        // Daily wake up - update display
-        updatePregnancyDisplay();
     }
+    
+    updatePregnancyDisplay();
 }
 
 void loop() {
@@ -222,58 +196,25 @@ void loop() {
 }
 
 void setupDailyAlarm() {
-    // Get current time using existing network functions
-    network.setTime(timeZone);
-    network.getTime(&currentTime);
+    syncTime();
+    setupRTC();
     
-    // Set timezone for RTC
-    rtc.setTimezone(timeZone);
-    
-    // Set alarm for next 7:00 AM
-    struct tm alarmTime = {0};
-    alarmTime.tm_hour = WAKE_HOUR;
-    alarmTime.tm_min = WAKE_MINUTE;
-    alarmTime.tm_sec = 0;
-    
-    // If it's already past 7 AM today, set for tomorrow
-    if (currentTime.tm_hour > WAKE_HOUR || 
-        (currentTime.tm_hour == WAKE_HOUR && currentTime.tm_min >= WAKE_MINUTE)) {
-        alarmTime.tm_mday = currentTime.tm_mday + 1;
-        alarmTime.tm_mon = currentTime.tm_mon;
-    } else {
-        alarmTime.tm_mday = currentTime.tm_mday;
-        alarmTime.tm_mon = currentTime.tm_mon;
-    }
-    
+    struct tm alarmTime = calculateNextAlarmTime();
     double secondsUntilAlarm = rtc.setAlarm(alarmTime, RTC_DHHMMSS);
     
     if (secondsUntilAlarm > 0) {
-        // Show current pregnancy progress
         showPregnancyProgress();
         deepSleep();
     } else {
-        display.setTextColor(INKPLATE2_BLACK);
-        display.setCursor(10, 20);
-        display.setTextSize(1);
-        display.println("Error: Could not set alarm");
-        display.display();
+        showErrorMessage("Could not set alarm");
         deepSleep();
     }
 }
 
 void updatePregnancyDisplay() {
-    // WiFi should already be connected from previous setup
-    // Get current time
-    network.setTime(timeZone);
-    network.getTime(&currentTime);
-    
-    // Show pregnancy progress
+    syncTime();
     showPregnancyProgress();
-    
-    // Set next alarm for tomorrow at 7 AM
     setNextDailyAlarm();
-    
-    // Go back to sleep
     deepSleep();
 }
 
@@ -294,34 +235,14 @@ void showPregnancyProgress() {
     // Display progress bar
     displayProgressBar(percentComplete);
     
-    // Display last update time
-    displayLastUpdate();
     
     // Update display
     display.display();
 }
 
 void displayPregnancyInfo(int daysRemaining, int currentWeek, int currentTrimester, float percentComplete) {
-    // Left column - Days remaining (large with bold font)
-    display.setFont(&FreeSansBold24pt7b);
-    display.setCursor(5, 39);
-    display.printf("%d", daysRemaining);
-    
-    // Center "days left" under the number
-    display.setFont(&FreeSans9pt7b);
-    display.setCursor(15, 54);
-    display.println("days left");
-    
-    // Right column - Week info (moved left to avoid clipping)
-    display.setFont(&FreeSans12pt7b);
-    display.setCursor(100, 25);
-    display.printf("Week %d", currentWeek);
-    
-    // Trimester info
-    display.setFont(&FreeSans9pt7b);
-    display.setCursor(100, 40);
-    display.printf("Trimester %d", currentTrimester);
-    
+    displayDaysRemaining(daysRemaining);
+    displayWeekInfo(currentWeek, currentTrimester);
 }
 
 void displayProgressBar(float percentComplete) {
@@ -387,9 +308,6 @@ void displayProgressBar(float percentComplete) {
     }
 }
 
-void displayLastUpdate() {
-    // This function is now unused - timestamp moved to displayPregnancyInfo
-}
 
 int calculateDaysRemaining() {
     time_t now = mktime(&currentTime);
@@ -429,7 +347,6 @@ float calculatePercentComplete() {
     return percent > 100.0 ? 100.0 : (percent < 0.0 ? 0.0 : percent);
 }
 
-// Battery gauge removed - no hardware support
 
 void setNextDailyAlarm() {
     struct tm alarmTime = {0};
@@ -444,4 +361,110 @@ void setNextDailyAlarm() {
 
 void deepSleep() {
     esp_deep_sleep_start();
+}
+
+// Helper functions for better code organization
+void initializeDisplay() {
+    display.begin();
+    display.clearDisplay();
+}
+
+bool ensureDatesConfigured() {
+    loadConfig();
+    
+    while (!areDatesValid()) {
+        Serial.println("Dates not configured, entering setup mode");
+        configureWiFiAndDates();
+        if (!areDatesValid()) {
+            Serial.println("Dates still not configured. Please connect to Pregometer-Setup WiFi and enter dates.");
+            delay(5000);
+        }
+    }
+    return true;
+}
+
+void parseDateStrings() {
+    parseDateString(start_date, &startDate);
+    parseDateString(due_date, &dueDate);
+    Serial.println("Dates configured successfully!");
+}
+
+bool isFirstRun() {
+    return esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER;
+}
+
+void syncTime() {
+    ensureWiFiConnected();
+    network.setTime(TIMEZONE_OFFSET);
+    network.getTime(&currentTime);
+}
+
+void setupRTC() {
+    rtc.setTimezone(TIMEZONE_OFFSET);
+}
+
+struct tm calculateNextAlarmTime() {
+    struct tm alarmTime = {0};
+    alarmTime.tm_hour = WAKE_HOUR;
+    alarmTime.tm_min = WAKE_MINUTE;
+    alarmTime.tm_sec = 0;
+    
+    if (currentTime.tm_hour > WAKE_HOUR || 
+        (currentTime.tm_hour == WAKE_HOUR && currentTime.tm_min >= WAKE_MINUTE)) {
+        alarmTime.tm_mday = currentTime.tm_mday + 1;
+        alarmTime.tm_mon = currentTime.tm_mon;
+    } else {
+        alarmTime.tm_mday = currentTime.tm_mday;
+        alarmTime.tm_mon = currentTime.tm_mon;
+    }
+    
+    return alarmTime;
+}
+
+void showErrorMessage(const char* message) {
+    display.setTextColor(INKPLATE2_BLACK);
+    display.setCursor(10, 20);
+    display.setTextSize(1);
+    display.println(message);
+    display.display();
+}
+
+void displayDaysRemaining(int daysRemaining) {
+    display.setFont(&FreeSansBold24pt7b);
+    display.setCursor(5, 39);
+    display.printf("%d", daysRemaining);
+    
+    display.setFont(&FreeSans9pt7b);
+    display.setCursor(15, 54);
+    display.println("days left");
+}
+
+void displayWeekInfo(int currentWeek, int currentTrimester) {
+    display.setFont(&FreeSans12pt7b);
+    display.setCursor(100, 25);
+    display.printf("Week %d", currentWeek);
+    
+    display.setFont(&FreeSans9pt7b);
+    display.setCursor(100, 40);
+    display.printf("Trimester %d", currentTrimester);
+}
+
+void ensureWiFiConnected() {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi not connected, attempting to reconnect...");
+        WiFi.begin();
+        
+        int attempts = 0;
+        while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+            delay(500);
+            Serial.print(".");
+            attempts++;
+        }
+        
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.println("\nWiFi reconnected");
+        } else {
+            Serial.println("\nFailed to reconnect to WiFi");
+        }
+    }
 }
