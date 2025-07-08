@@ -200,24 +200,58 @@ void displayProgressBar(float percentComplete) {
     // Draw progress bar outline
     display.drawRect(barX, barY, barWidth, barHeight, INKPLATE2_BLACK);
     
-    // Fill progress bar
+    // Calculate text dimensions to center it
+    display.setFont(&FreeSans9pt7b);
+    char percentText[10];
+    sprintf(percentText, "%.0f%%", percentComplete);
+    
+    int16_t x1, y1;
+    uint16_t w, h;
+    display.getTextBounds(percentText, 0, 0, &x1, &y1, &w, &h);
+    
+    int textX = barX + (barWidth - w) / 2;
+    int textY = barY + (barHeight + h) / 2;
+    
+    // Calculate fill width and determine text overlap
     int fillWidth = (int)((barWidth - 2) * percentComplete / 100.0);
+    int fillRight = barX + 1 + fillWidth;
+    int textRight = textX + w;
+    
+    // Fill the progress bar
     if (fillWidth > 0) {
         display.fillRect(barX + 1, barY + 1, fillWidth, barHeight - 2, INKPLATE2_BLACK);
     }
     
-    // Add percentage text inside bar - position and color based on fill level
-    display.setFont(&FreeSans9pt7b);
-    if (percentComplete < 50.0) {
-        // Less than 50% filled - use black text, right-aligned in unfilled area
+    // Now handle the progress bar text based on what portion overlaps
+    if (fillWidth == 0) {
+        // No fill - just black text on white background
         display.setTextColor(INKPLATE2_BLACK);
-        display.setCursor(barX + barWidth - 40, barY + 20);  // Right side of bar
-    } else {
-        // More than 50% filled - use white text, left-aligned in filled area
+        display.setCursor(textX, textY);
+        display.print(percentText);
+    } else if (textRight <= fillRight) {
+        // Text entirely within filled area - white text on black background
         display.setTextColor(INKPLATE2_WHITE);
-        display.setCursor(barX + 10, barY + 20);  // Left side of bar
+        display.setCursor(textX, textY);
+        display.print(percentText);
+    } else if (textX >= fillRight) {
+        // Text entirely in unfilled area - black text on white background
+        display.setTextColor(INKPLATE2_BLACK);
+        display.setCursor(textX, textY);
+        display.print(percentText);
+    } else {
+        // Text spans both areas - draw white text first, then mask unfilled portion
+        display.setTextColor(INKPLATE2_WHITE);
+        display.setCursor(textX, textY);
+        display.print(percentText);
+        
+        // Clear the unfilled portion back to white background
+        display.fillRect(fillRight, barY + 1, (barX + barWidth - 1) - fillRight, barHeight - 2, INKPLATE2_WHITE);
+        
+        // Draw black text over the unfilled portion
+        display.setTextColor(INKPLATE2_BLACK);
+        display.setCursor(textX, textY);
+        display.print(percentText);
     }
-    display.printf("%.0f%%", percentComplete);
 }
 
 void displayLastUpdate() {
