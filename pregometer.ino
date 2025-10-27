@@ -46,6 +46,7 @@ const int TIMEZONE_OFFSET = -3;
 char start_date[11] = "";
 char due_date[11] = "";
 bool shouldSaveConfig = false;
+bool forceReconfigure = false;
 
 // Date structures
 struct tm dueDate = {0};
@@ -121,9 +122,33 @@ void parseDateString(const char* dateStr, struct tm* date) {
 }
 
 bool areDatesValid() {
-    return (strlen(start_date) == 10 && strlen(due_date) == 10 && 
+    return (strlen(start_date) == 10 && strlen(due_date) == 10 &&
             start_date[4] == '-' && start_date[7] == '-' &&
             due_date[4] == '-' && due_date[7] == '-');
+}
+
+bool checkForReconfigureCommand() {
+    Serial.println("Send 'RECONFIGURE' within 3 seconds to change dates...");
+    unsigned long startTime = millis();
+    String input = "";
+
+    while (millis() - startTime < 3000) {
+        if (Serial.available() > 0) {
+            char c = Serial.read();
+            if (c == '\n' || c == '\r') {
+                if (input.equalsIgnoreCase("RECONFIGURE")) {
+                    Serial.println("Reconfiguration requested!");
+                    return true;
+                }
+                input = "";
+            } else {
+                input += c;
+            }
+        }
+        delay(10);
+    }
+    Serial.println("Continuing with current configuration...");
+    return false;
 }
 
 void configureWiFiAndDates() {
@@ -175,19 +200,23 @@ void configureWiFiAndDates() {
 
 void setup() {
     Serial.begin(115200);
+    delay(100); // Give serial time to initialize
     initializeDisplay();
-    
+
+    // Check if user wants to reconfigure
+    forceReconfigure = checkForReconfigureCommand();
+
     if (!ensureDatesConfigured()) {
         Serial.println("Failed to configure dates");
         return;
     }
-    
+
     parseDateStrings();
-    
+
     if (isFirstRun()) {
         setupDailyAlarm();
     }
-    
+
     updatePregnancyDisplay();
 }
 
@@ -371,7 +400,14 @@ void initializeDisplay() {
 
 bool ensureDatesConfigured() {
     loadConfig();
-    
+
+    // Force reconfiguration if requested
+    if (forceReconfigure) {
+        Serial.println("Reconfiguration mode activated");
+        configureWiFiAndDates();
+        forceReconfigure = false; // Reset flag
+    }
+
     while (!areDatesValid()) {
         Serial.println("Dates not configured, entering setup mode");
         configureWiFiAndDates();
@@ -433,7 +469,7 @@ void displayDaysRemaining(int daysRemaining) {
     display.setFont(&FreeSansBold24pt7b);
     display.setCursor(5, 39);
     display.printf("%d", daysRemaining);
-    
+
     display.setFont(&FreeSans9pt7b);
     display.setCursor(15, 54);
     display.println("days left");

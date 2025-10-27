@@ -39,6 +39,15 @@ The device uses WiFiManager for configuration. On first boot or when pregnancy d
    - Due Date: Expected due date in YYYY-MM-DD format
 4. Configuration is saved to SPIFFS and persists across reboots
 
+### Reconfiguring Dates:
+To change the due date or start date after initial configuration:
+
+1. Connect to the device via serial monitor at 115200 baud
+2. Press the reset button or power cycle the device
+3. Within 3 seconds of boot, type "RECONFIGURE" and press Enter
+4. The device will enter configuration mode and create the "Pregometer-Setup" WiFi access point
+5. Connect to the WiFi and navigate to 192.168.4.1 to update dates
+
 Manual configuration in code (if needed):
 - Timezone in timeZone variable (default: -3 for UTC-3)
 
