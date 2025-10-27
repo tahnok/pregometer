@@ -466,9 +466,24 @@ void showErrorMessage(const char* message) {
 }
 
 void displayDaysRemaining(int daysRemaining) {
+    // Format the number
+    char daysText[10];
+    sprintf(daysText, "%d", daysRemaining);
+
+    // Measure the number's dimensions
     display.setFont(&FreeSansBold24pt7b);
-    display.setCursor(5, 39);
-    display.printf("%d", daysRemaining);
+    int16_t x1, y1;
+    uint16_t w, h;
+    display.getTextBounds(daysText, 0, 0, &x1, &y1, &w, &h);
+
+    // Center the number above "days left" text (which is at x=15)
+    // "days left" width is approximately 60-70 pixels with FreeSans9pt7b
+    // Center the number in approximately the same horizontal space
+    int centerX = 45; // Center point for left column
+    int numberX = centerX - (w / 2);
+
+    display.setCursor(numberX, 39);
+    display.print(daysText);
 
     display.setFont(&FreeSans9pt7b);
     display.setCursor(15, 54);
