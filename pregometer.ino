@@ -46,6 +46,7 @@ const int TIMEZONE_OFFSET = -3;
 char start_date[11] = "";
 char due_date[11] = "";
 char birth_date[11] = "";
+char baby_name[32] = "";
 bool shouldSaveConfig = false;
 bool forceReconfigure = false;
 
@@ -54,6 +55,58 @@ struct tm dueDate = {0};
 struct tm startDate = {0};
 struct tm birthDate = {0};
 struct tm currentTime;
+
+// Zodiac sign determination
+const char* getZodiacSign(int month, int day) {
+    if ((month == 3 && day >= 21) || (month == 4 && day <= 19)) return "Aries";
+    if ((month == 4 && day >= 20) || (month == 5 && day <= 20)) return "Taurus";
+    if ((month == 5 && day >= 21) || (month == 6 && day <= 20)) return "Gemini";
+    if ((month == 6 && day >= 21) || (month == 7 && day <= 22)) return "Cancer";
+    if ((month == 7 && day >= 23) || (month == 8 && day <= 22)) return "Leo";
+    if ((month == 8 && day >= 23) || (month == 9 && day <= 22)) return "Virgo";
+    if ((month == 9 && day >= 23) || (month == 10 && day <= 22)) return "Libra";
+    if ((month == 10 && day >= 23) || (month == 11 && day <= 21)) return "Scorpio";
+    if ((month == 11 && day >= 22) || (month == 12 && day <= 21)) return "Sagittarius";
+    if ((month == 12 && day >= 22) || (month == 1 && day <= 19)) return "Capricorn";
+    if ((month == 1 && day >= 20) || (month == 2 && day <= 18)) return "Aquarius";
+    if ((month == 2 && day >= 19) || (month == 3 && day <= 20)) return "Pisces";
+    return "Unknown";
+}
+
+// Get zodiac symbol (simplified text representation)
+const char* getZodiacSymbol(const char* sign) {
+    if (strcmp(sign, "Aries") == 0) return "Y";      // Ram horns
+    if (strcmp(sign, "Taurus") == 0) return "O";     // Bull head
+    if (strcmp(sign, "Gemini") == 0) return "II";    // Twins
+    if (strcmp(sign, "Cancer") == 0) return "69";    // Crab
+    if (strcmp(sign, "Leo") == 0) return "Q";        // Lion
+    if (strcmp(sign, "Virgo") == 0) return "M";      // Virgin
+    if (strcmp(sign, "Libra") == 0) return "=";      // Scales
+    if (strcmp(sign, "Scorpio") == 0) return "M";    // Scorpion
+    if (strcmp(sign, "Sagittarius") == 0) return "}"; // Arrow
+    if (strcmp(sign, "Capricorn") == 0) return "V";  // Goat
+    if (strcmp(sign, "Aquarius") == 0) return "~";   // Water
+    if (strcmp(sign, "Pisces") == 0) return "X";     // Fish
+    return "?";
+}
+
+// Get all 12 zodiac signs in order starting from a specific sign
+void getZodiacOrder(const char* startSign, const char* signs[12]) {
+    const char* allSigns[12] = {"Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo",
+                                 "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"};
+
+    int startIdx = 0;
+    for (int i = 0; i < 12; i++) {
+        if (strcmp(allSigns[i], startSign) == 0) {
+            startIdx = i;
+            break;
+        }
+    }
+
+    for (int i = 0; i < 12; i++) {
+        signs[i] = allSigns[(startIdx + i) % 12];
+    }
+}
 
 void saveConfigCallback() {
     Serial.println("Should save config");
@@ -80,6 +133,9 @@ void loadConfig() {
                     strcpy(due_date, json["due_date"]);
                     if (json.containsKey("birth_date")) {
                         strcpy(birth_date, json["birth_date"]);
+                    }
+                    if (json.containsKey("baby_name")) {
+                        strcpy(baby_name, json["baby_name"]);
                     }
                 } else {
                     Serial.println("failed to load json config");
@@ -108,6 +164,7 @@ void saveConfig() {
     json["start_date"] = start_date;
     json["due_date"] = due_date;
     json["birth_date"] = birth_date;
+    json["baby_name"] = baby_name;
 
     fs::File configFile = SPIFFS.open("/config.json", "w");
     if (!configFile) {
@@ -196,11 +253,13 @@ void configureWiFiAndDates() {
     WiFiManagerParameter custom_start_date("start_date", "Start Date (YYYY-MM-DD)", start_date, 11);
     WiFiManagerParameter custom_due_date("due_date", "Due Date (YYYY-MM-DD)", due_date, 11);
     WiFiManagerParameter custom_birth_date("birth_date", "Birth Date (YYYY-MM-DD, optional)", birth_date, 11);
+    WiFiManagerParameter custom_baby_name("baby_name", "Baby Name (optional)", baby_name, 32);
 
     // Add parameters to WiFiManager
     wifiManager.addParameter(&custom_start_date);
     wifiManager.addParameter(&custom_due_date);
     wifiManager.addParameter(&custom_birth_date);
+    wifiManager.addParameter(&custom_baby_name);
     
     Serial.println("Starting WiFi configuration portal...");
     Serial.println("Connect to 'Pregometer-Setup' WiFi and go to 192.168.4.1");
@@ -218,6 +277,7 @@ void configureWiFiAndDates() {
     strcpy(start_date, custom_start_date.getValue());
     strcpy(due_date, custom_due_date.getValue());
     strcpy(birth_date, custom_birth_date.getValue());
+    strcpy(baby_name, custom_baby_name.getValue());
 
     // Log the configured dates
     Serial.print("Start date: ");
@@ -226,6 +286,8 @@ void configureWiFiAndDates() {
     Serial.println(due_date);
     Serial.print("Birth date: ");
     Serial.println(birth_date);
+    Serial.print("Baby name: ");
+    Serial.println(baby_name);
     
     // Save configuration if changed
     if (shouldSaveConfig) {
@@ -616,8 +678,31 @@ void showBirthProgress() {
     display.clearDisplay();
     display.setTextColor(INKPLATE2_BLACK);
 
-    displayDaysOld(daysSinceBirth);
-    displayAgeInfo(weeks, months);
+    // Display baby name at top if configured
+    if (strlen(baby_name) > 0) {
+        display.setFont(&FreeSans9pt7b);
+        int16_t x1, y1;
+        uint16_t w, h;
+        display.getTextBounds(baby_name, 0, 0, &x1, &y1, &w, &h);
+        int nameX = (212 - w) / 2;  // Center horizontally
+        display.setCursor(nameX, 12);
+        display.print(baby_name);
+    }
+
+    // Get birth sign for zodiac display
+    struct tm effectiveBirth = getEffectiveBirthDate();
+    const char* birthSign = getZodiacSign(effectiveBirth.tm_mon + 1, effectiveBirth.tm_mday);
+
+    // Calculate percentage of first year complete (0-100%)
+    float yearProgress = (daysSinceBirth / 365.0) * 100.0;
+    if (yearProgress > 100.0) yearProgress = 100.0;
+
+    // Draw circular progress indicator on left side
+    int circleY = strlen(baby_name) > 0 ? 60 : 52;  // Adjust position if name is shown
+    drawCircularProgress(45, circleY, 25, yearProgress, birthSign);
+
+    // Display age info on right side (compact format)
+    displayCompactAgeInfo(daysSinceBirth, weeks, months);
 
     // Show corrected age if baby was born early
     if (wasBornEarly()) {
@@ -625,6 +710,29 @@ void showBirthProgress() {
     }
 
     display.display();
+}
+
+// Compact age display for new layout
+void displayCompactAgeInfo(int days, int weeks, int months) {
+    int startX = 100;
+    int startY = strlen(baby_name) > 0 ? 35 : 30;
+
+    // Display days in larger font
+    display.setFont(&FreeSans18pt7b);
+    display.setCursor(startX, startY);
+    display.printf("%d", days);
+
+    // Display "days" label
+    display.setFont(&FreeSans9pt7b);
+    display.setCursor(startX, startY + 18);
+    display.print("days");
+
+    // Display weeks and months
+    display.setCursor(startX, startY + 36);
+    display.printf("%dw", weeks);
+
+    display.setCursor(startX, startY + 54);
+    display.printf("%dm", months);
 }
 
 void displayDaysOld(int daysOld) {
@@ -669,6 +777,53 @@ void displayCorrectedAge() {
     display.setFont(&FreeSans9pt7b);
     display.setCursor(5, 95);
     display.printf("Corrected: %dw / %dm", correctedWeeks, correctedMonths);
+}
+
+// Draw circular progress indicator with zodiac symbols
+void drawCircularProgress(int centerX, int centerY, int radius, float percentComplete, const char* birthSign) {
+    // Draw outer circle
+    display.drawCircle(centerX, centerY, radius, INKPLATE2_BLACK);
+    display.drawCircle(centerX, centerY, radius - 1, INKPLATE2_BLACK);
+
+    // Calculate progress arc (0-360 degrees, starting from top)
+    // Convert percentage to angle (0% = 0 degrees, 100% = 360 degrees)
+    float endAngle = (percentComplete / 100.0) * 360.0;
+
+    // Draw progress arc by filling segments
+    for (float angle = 0; angle < endAngle; angle += 2.0) {
+        float radians = (angle - 90) * PI / 180.0;  // -90 to start at top (12 o'clock)
+        int x1 = centerX + (radius - 6) * cos(radians);
+        int y1 = centerY + (radius - 6) * sin(radians);
+        int x2 = centerX + (radius - 2) * cos(radians);
+        int y2 = centerY + (radius - 2) * sin(radians);
+        display.drawLine(x1, y1, x2, y2, INKPLATE2_BLACK);
+    }
+
+    // Draw zodiac symbols around the circle
+    const char* zodiacOrder[12];
+    getZodiacOrder(birthSign, zodiacOrder);
+
+    display.setFont(&FreeSans9pt7b);
+    for (int i = 0; i < 12; i++) {
+        // Calculate angle for each zodiac (30 degrees apart, starting from top)
+        float angle = i * 30.0;
+        float radians = (angle - 90) * PI / 180.0;  // -90 to start at top
+
+        const char* symbol = getZodiacSymbol(zodiacOrder[i]);
+
+        // Position symbols outside the circle
+        int symbolX = centerX + (radius + 10) * cos(radians);
+        int symbolY = centerY + (radius + 10) * sin(radians);
+
+        // Adjust text position to center the symbol
+        int16_t x1, y1;
+        uint16_t w, h;
+        display.getTextBounds(symbol, 0, 0, &x1, &y1, &w, &h);
+
+        display.setCursor(symbolX - w/2, symbolY + h/2);
+        display.setTextColor(INKPLATE2_RED);  // Use red for zodiac symbols
+        display.print(symbol);
+    }
 }
 
 void ensureWiFiConnected() {
