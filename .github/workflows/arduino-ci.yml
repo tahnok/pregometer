@@ -26,6 +26,7 @@ jobs:
 
     - name: Install required libraries
       run: |
+        arduino-cli lib install Inkplate
         arduino-cli lib install WiFiManager
         arduino-cli lib install ArduinoJson
 
