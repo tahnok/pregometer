@@ -20,7 +20,7 @@ jobs:
     - name: Install Inkplate board platform
       run: |
         arduino-cli config init
-        arduino-cli config add board_manager.additional_urls https://raw.githubusercontent.com/e-radionicacom/Inkplate-board-manager/master/package_inkplate_boards_index.json
+        arduino-cli config add board_manager.additional_urls https://github.com/SolderedElectronics/Dasduino-Board-Definitions-for-Arduino-IDE/raw/master/package_Dasduino_Boards_index.json
         arduino-cli core update-index
         arduino-cli core install Inkplate_Boards:esp32
 
