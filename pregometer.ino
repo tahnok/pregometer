@@ -45,12 +45,14 @@ const int TIMEZONE_OFFSET = -3;
 // Configuration variables
 char start_date[11] = "";
 char due_date[11] = "";
+char birth_date[11] = "";
 bool shouldSaveConfig = false;
 bool forceReconfigure = false;
 
 // Date structures
 struct tm dueDate = {0};
 struct tm startDate = {0};
+struct tm birthDate = {0};
 struct tm currentTime;
 
 void saveConfigCallback() {
@@ -76,6 +78,9 @@ void loadConfig() {
                     Serial.println("parsed json");
                     strcpy(start_date, json["start_date"]);
                     strcpy(due_date, json["due_date"]);
+                    if (json.containsKey("birth_date")) {
+                        strcpy(birth_date, json["birth_date"]);
+                    }
                 } else {
                     Serial.println("failed to load json config");
                 }
@@ -102,7 +107,8 @@ void saveConfig() {
     DynamicJsonDocument json(1024);
     json["start_date"] = start_date;
     json["due_date"] = due_date;
-    
+    json["birth_date"] = birth_date;
+
     fs::File configFile = SPIFFS.open("/config.json", "w");
     if (!configFile) {
         Serial.println("failed to open config file for writing");
@@ -127,12 +133,36 @@ bool areDatesValid() {
             due_date[4] == '-' && due_date[7] == '-');
 }
 
+bool isBirthDateValid() {
+    return (strlen(birth_date) == 10 &&
+            birth_date[4] == '-' && birth_date[7] == '-');
+}
+
+bool isPostBirthMode() {
+    // If birth date is configured, use birth mode
+    if (isBirthDateValid()) {
+        return true;
+    }
+    // Auto-switch if current date is past due date
+    time_t now = mktime(&currentTime);
+    time_t due = mktime(&dueDate);
+    return difftime(now, due) > 0;
+}
+
+struct tm getEffectiveBirthDate() {
+    // If birth date is configured, use it; otherwise use due date
+    if (isBirthDateValid()) {
+        return birthDate;
+    }
+    return dueDate;
+}
+
 bool checkForReconfigureCommand() {
-    Serial.println("Send 'RECONFIGURE' within 3 seconds to change dates...");
+    Serial.println("Send 'RECONFIGURE' within 30 seconds to change dates...");
     unsigned long startTime = millis();
     String input = "";
 
-    while (millis() - startTime < 3000) {
+    while (millis() - startTime < 30000) {
         if (Serial.available() > 0) {
             char c = Serial.read();
             if (c == '\n' || c == '\r') {
@@ -165,10 +195,12 @@ void configureWiFiAndDates() {
     // Custom parameters for pregnancy dates
     WiFiManagerParameter custom_start_date("start_date", "Start Date (YYYY-MM-DD)", start_date, 11);
     WiFiManagerParameter custom_due_date("due_date", "Due Date (YYYY-MM-DD)", due_date, 11);
-    
+    WiFiManagerParameter custom_birth_date("birth_date", "Birth Date (YYYY-MM-DD, optional)", birth_date, 11);
+
     // Add parameters to WiFiManager
     wifiManager.addParameter(&custom_start_date);
     wifiManager.addParameter(&custom_due_date);
+    wifiManager.addParameter(&custom_birth_date);
     
     Serial.println("Starting WiFi configuration portal...");
     Serial.println("Connect to 'Pregometer-Setup' WiFi and go to 192.168.4.1");
@@ -185,12 +217,15 @@ void configureWiFiAndDates() {
     // Get custom parameters
     strcpy(start_date, custom_start_date.getValue());
     strcpy(due_date, custom_due_date.getValue());
-    
+    strcpy(birth_date, custom_birth_date.getValue());
+
     // Log the configured dates
     Serial.print("Start date: ");
     Serial.println(start_date);
     Serial.print("Due date: ");
     Serial.println(due_date);
+    Serial.print("Birth date: ");
+    Serial.println(birth_date);
     
     // Save configuration if changed
     if (shouldSaveConfig) {
@@ -203,8 +238,11 @@ void setup() {
     delay(100); // Give serial time to initialize
     initializeDisplay();
 
-    // Check if user wants to reconfigure
-    forceReconfigure = checkForReconfigureCommand();
+    // Only check for reconfigure command on manual reset/power-on (not timer wake-up)
+    // Timer wake-ups are unattended battery operation - no point waiting for serial
+    if (isFirstRun()) {
+        forceReconfigure = checkForReconfigureCommand();
+    }
 
     if (!ensureDatesConfigured()) {
         Serial.println("Failed to configure dates");
@@ -217,7 +255,7 @@ void setup() {
         setupDailyAlarm();
     }
 
-    updatePregnancyDisplay();
+    updateDisplay();
 }
 
 void loop() {
@@ -227,12 +265,16 @@ void loop() {
 void setupDailyAlarm() {
     syncTime();
     setupRTC();
-    
+
     struct tm alarmTime = calculateNextAlarmTime();
     double secondsUntilAlarm = rtc.setAlarm(alarmTime, RTC_DHHMMSS);
-    
+
     if (secondsUntilAlarm > 0) {
-        showPregnancyProgress();
+        if (isPostBirthMode()) {
+            showBirthProgress();
+        } else {
+            showPregnancyProgress();
+        }
         deepSleep();
     } else {
         showErrorMessage("Could not set alarm");
@@ -240,9 +282,13 @@ void setupDailyAlarm() {
     }
 }
 
-void updatePregnancyDisplay() {
+void updateDisplay() {
     syncTime();
-    showPregnancyProgress();
+    if (isPostBirthMode()) {
+        showBirthProgress();
+    } else {
+        showPregnancyProgress();
+    }
     setNextDailyAlarm();
     deepSleep();
 }
@@ -368,12 +414,70 @@ int calculateTrimester(int week) {
 float calculatePercentComplete() {
     time_t now = mktime(&currentTime);
     time_t start = mktime(&startDate);
-    
+
     double diffSeconds = difftime(now, start);
     int daysPassed = (int)(diffSeconds / (24 * 3600));
-    
+
     float percent = ((float)daysPassed / TOTAL_PREGNANCY_DAYS) * 100.0;
     return percent > 100.0 ? 100.0 : (percent < 0.0 ? 0.0 : percent);
+}
+
+// Birth mode age calculation functions
+int calculateDaysSinceBirth() {
+    struct tm effectiveBirth = getEffectiveBirthDate();
+    time_t now = mktime(&currentTime);
+    time_t birth = mktime(&effectiveBirth);
+
+    double diffSeconds = difftime(now, birth);
+    int diffDays = (int)(diffSeconds / (24 * 3600));
+
+    return diffDays > 0 ? diffDays : 0;
+}
+
+int calculateWeeksSinceBirth() {
+    return calculateDaysSinceBirth() / 7;
+}
+
+int calculateMonthsSinceBirth() {
+    struct tm effectiveBirth = getEffectiveBirthDate();
+
+    int months = (currentTime.tm_year - effectiveBirth.tm_year) * 12;
+    months += (currentTime.tm_mon - effectiveBirth.tm_mon);
+
+    // Adjust if we haven't reached the day of the month yet
+    if (currentTime.tm_mday < effectiveBirth.tm_mday) {
+        months--;
+    }
+
+    return months > 0 ? months : 0;
+}
+
+// Corrected age for premature babies
+int calculateCorrectedAgeDays() {
+    // Corrected age = chronological age - (due date - birth date)
+    struct tm effectiveBirth = getEffectiveBirthDate();
+    time_t birth = mktime(&effectiveBirth);
+    time_t due = mktime(&dueDate);
+
+    // Days early = due date - birth date
+    double earlySeconds = difftime(due, birth);
+    int daysEarly = (int)(earlySeconds / (24 * 3600));
+
+    if (daysEarly <= 0) {
+        // Baby was born on or after due date, no correction needed
+        return calculateDaysSinceBirth();
+    }
+
+    int correctedDays = calculateDaysSinceBirth() - daysEarly;
+    return correctedDays > 0 ? correctedDays : 0;
+}
+
+bool wasBornEarly() {
+    struct tm effectiveBirth = getEffectiveBirthDate();
+    time_t birth = mktime(&effectiveBirth);
+    time_t due = mktime(&dueDate);
+
+    return difftime(due, birth) > 0;
 }
 
 
@@ -422,6 +526,9 @@ bool ensureDatesConfigured() {
 void parseDateStrings() {
     parseDateString(start_date, &startDate);
     parseDateString(due_date, &dueDate);
+    if (isBirthDateValid()) {
+        parseDateString(birth_date, &birthDate);
+    }
     Serial.println("Dates configured successfully!");
 }
 
@@ -494,10 +601,74 @@ void displayWeekInfo(int currentWeek, int currentTrimester) {
     display.setFont(&FreeSans12pt7b);
     display.setCursor(100, 25);
     display.printf("Week %d", currentWeek);
-    
+
     display.setFont(&FreeSans9pt7b);
     display.setCursor(100, 40);
     display.printf("Trimester %d", currentTrimester);
+}
+
+// Birth mode display functions
+void showBirthProgress() {
+    int daysSinceBirth = calculateDaysSinceBirth();
+    int weeks = calculateWeeksSinceBirth();
+    int months = calculateMonthsSinceBirth();
+
+    display.clearDisplay();
+    display.setTextColor(INKPLATE2_BLACK);
+
+    displayDaysOld(daysSinceBirth);
+    displayAgeInfo(weeks, months);
+
+    // Show corrected age if baby was born early
+    if (wasBornEarly()) {
+        displayCorrectedAge();
+    }
+
+    display.display();
+}
+
+void displayDaysOld(int daysOld) {
+    char daysText[10];
+    sprintf(daysText, "%d", daysOld);
+
+    display.setFont(&FreeSansBold24pt7b);
+    int16_t x1, y1;
+    uint16_t w, h;
+    display.getTextBounds(daysText, 0, 0, &x1, &y1, &w, &h);
+
+    int centerX = 45;
+    int numberX = centerX - (w / 2);
+
+    display.setCursor(numberX, 39);
+    display.print(daysText);
+
+    display.setFont(&FreeSans9pt7b);
+    display.setCursor(15, 54);
+    display.println("days old");
+}
+
+void displayAgeInfo(int weeks, int months) {
+    display.setFont(&FreeSans12pt7b);
+    display.setCursor(100, 25);
+    display.printf("%d weeks", weeks);
+
+    display.setFont(&FreeSans12pt7b);
+    display.setCursor(100, 50);
+    if (months == 1) {
+        display.printf("%d month", months);
+    } else {
+        display.printf("%d months", months);
+    }
+}
+
+void displayCorrectedAge() {
+    int correctedDays = calculateCorrectedAgeDays();
+    int correctedWeeks = correctedDays / 7;
+    int correctedMonths = correctedDays / 30;  // Approximate
+
+    display.setFont(&FreeSans9pt7b);
+    display.setCursor(5, 95);
+    display.printf("Corrected: %dw / %dm", correctedWeeks, correctedMonths);
 }
 
 void ensureWiFiConnected() {

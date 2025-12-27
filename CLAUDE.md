@@ -5,19 +5,37 @@ The screen is 212 x 104 px and the default orientation is landscape.
 Once a day at 7am the device wakes up and updates the screen. It then goes back to sleep until the next day.
 The deep sleep clock uses the RTC periphreal and sets the time using WiFI when it wakes up.
 
-The purpose of this app is show the progress of a pregnancy. 
+The purpose of this app is to show the progress of a pregnancy, and after birth, track the baby's age.
 
+## Modes:
+
+### Pregnancy Mode (default)
 The screen shows the number of days until the due date, the current trimester and the current week of the pregnancy.
-There's also a percentage complete based on the total number of days of the pregancy, and a progress bar.
-The last update date/time is displayed in the bottom left corner in MM/DD HH:MM format.
+There's also a percentage complete based on the total number of days of the pregnancy, and a progress bar.
+
+### Birth Mode
+After birth, the device switches to tracking the baby's age:
+- Days since birth (large number on left)
+- Weeks and months old (right side)
+- Corrected age (shown if baby was born before due date)
+
+The device automatically switches to birth mode when:
+1. A birth date is configured, OR
+2. The current date is past the due date
 
 The examples/ directory contains example sketches from the manufacturer showing how the RTC works and WiFi.
 
 ## Display Layout (212x104 landscape):
-- Left side: Large days remaining number (text size 3) with "days left" below
-- Right side: Week number (text size 2) with "Trimester X" below  
-- Middle: Wide progress bar (180px x 20px) with percentage inside
-- Bottom left: Last update timestamp
+
+### Pregnancy Mode:
+- Left side: Large days remaining number with "days left" below
+- Right side: Week number with "Trimester X" below
+- Middle: Wide progress bar (198px x 30px) with percentage inside
+
+### Birth Mode:
+- Left side: Large days count with "days old" below
+- Right side: Weeks and months display
+- Bottom: Corrected age (only if baby was born early)
 
 ## Project Structure:
 - pregometer.ino - Main sketch file with WiFiManager integration
@@ -34,9 +52,10 @@ The device uses WiFiManager for configuration. On first boot or when pregnancy d
 
 1. Device creates "Pregometer-Setup" WiFi access point
 2. Connect to this WiFi and navigate to 192.168.4.1
-3. Configure WiFi credentials and pregnancy dates:
+3. Configure WiFi credentials and dates:
    - Start Date: LMP date in YYYY-MM-DD format
    - Due Date: Expected due date in YYYY-MM-DD format
+   - Birth Date: Actual birth date in YYYY-MM-DD format (optional, leave blank during pregnancy)
 4. Configuration is saved to SPIFFS and persists across reboots
 
 ### Reconfiguring Dates:
@@ -53,9 +72,10 @@ Manual configuration in code (if needed):
 
 ## Hardware notes:
 - No battery gauge available on this Inkplate2 hardware
-- Device shows pregnancy progress on every boot/reboot, not just alarm wake-ups
-- Week calculation: based on days since LMP start date divided by 7 (no +1 offset)
+- Device shows progress on every boot/reboot, not just alarm wake-ups
+- Pregnancy week calculation: based on days since LMP start date divided by 7 (no +1 offset)
 - Pregnancy duration: 280 days total (40 weeks)
+- Corrected age: calculated as chronological age minus days born early (for premature babies)
 
 ## Compile and Upload
 
