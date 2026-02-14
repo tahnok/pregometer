@@ -30,6 +30,7 @@
 #include "FreeSans9pt7b.h"
 #include "FreeSans12pt7b.h"
 #include "FreeSans18pt7b.h"
+#include "FreeSansBold9pt7b.h"
 #include "FreeSansBold24pt7b.h"
 
 Inkplate display;
@@ -46,6 +47,7 @@ const int TIMEZONE_OFFSET = -3;
 char start_date[11] = "";
 char due_date[11] = "";
 char birth_date[11] = "";
+char baby_name[32] = "";
 bool shouldSaveConfig = false;
 bool forceReconfigure = false;
 
@@ -81,6 +83,9 @@ void loadConfig() {
                     if (json.containsKey("birth_date")) {
                         strcpy(birth_date, json["birth_date"]);
                     }
+                    if (json.containsKey("baby_name")) {
+                        strcpy(baby_name, json["baby_name"]);
+                    }
                 } else {
                     Serial.println("failed to load json config");
                 }
@@ -108,6 +113,7 @@ void saveConfig() {
     json["start_date"] = start_date;
     json["due_date"] = due_date;
     json["birth_date"] = birth_date;
+    json["baby_name"] = baby_name;
 
     fs::File configFile = SPIFFS.open("/config.json", "w");
     if (!configFile) {
@@ -196,11 +202,13 @@ void configureWiFiAndDates() {
     WiFiManagerParameter custom_start_date("start_date", "Start Date (YYYY-MM-DD)", start_date, 11);
     WiFiManagerParameter custom_due_date("due_date", "Due Date (YYYY-MM-DD)", due_date, 11);
     WiFiManagerParameter custom_birth_date("birth_date", "Birth Date (YYYY-MM-DD, optional)", birth_date, 11);
+    WiFiManagerParameter custom_baby_name("baby_name", "Baby's Name", baby_name, 32);
 
     // Add parameters to WiFiManager
     wifiManager.addParameter(&custom_start_date);
     wifiManager.addParameter(&custom_due_date);
     wifiManager.addParameter(&custom_birth_date);
+    wifiManager.addParameter(&custom_baby_name);
     
     Serial.println("Starting WiFi configuration portal...");
     Serial.println("Connect to 'Pregometer-Setup' WiFi and go to 192.168.4.1");
@@ -218,6 +226,7 @@ void configureWiFiAndDates() {
     strcpy(start_date, custom_start_date.getValue());
     strcpy(due_date, custom_due_date.getValue());
     strcpy(birth_date, custom_birth_date.getValue());
+    strcpy(baby_name, custom_baby_name.getValue());
 
     // Log the configured dates
     Serial.print("Start date: ");
@@ -226,6 +235,8 @@ void configureWiFiAndDates() {
     Serial.println(due_date);
     Serial.print("Birth date: ");
     Serial.println(birth_date);
+    Serial.print("Baby name: ");
+    Serial.println(baby_name);
     
     // Save configuration if changed
     if (shouldSaveConfig) {
@@ -607,6 +618,81 @@ void displayWeekInfo(int currentWeek, int currentTrimester) {
     display.printf("Trimester %d", currentTrimester);
 }
 
+// Helper function to draw a filled arc (pie slice)
+void fillArc(int centerX, int centerY, int radius, float startAngle, float endAngle, int color) {
+    // Draw filled arc using small triangles
+    float angleStep = 0.05;  // Small steps for smooth arc
+    for (float angle = startAngle; angle < endAngle; angle += angleStep) {
+        float nextAngle = angle + angleStep;
+        if (nextAngle > endAngle) nextAngle = endAngle;
+
+        int x1 = centerX + radius * cos(angle);
+        int y1 = centerY + radius * sin(angle);
+        int x2 = centerX + radius * cos(nextAngle);
+        int y2 = centerY + radius * sin(nextAngle);
+
+        display.fillTriangle(centerX, centerY, x1, y1, x2, y2, color);
+    }
+}
+
+void displayFirstYearProgress(int daysSinceBirth) {
+    const int DAYS_IN_YEAR = 365;
+    float percent = (float)daysSinceBirth / DAYS_IN_YEAR * 100.0;
+    if (percent > 100.0) percent = 100.0;
+
+    // Circle parameters - positioned on right side
+    int centerX = 168;
+    int centerY = 60;
+    int radius = 36;
+    int innerRadius = 24;
+
+    // Draw background circle outline
+    display.drawCircle(centerX, centerY, radius, INKPLATE2_BLACK);
+
+    // Draw filled arc (clock-style, starting from 12 o'clock)
+    if (percent > 0) {
+        float startAngle = -M_PI / 2;  // 12 o'clock position
+        float endAngle = startAngle + (M_PI * 2 * percent / 100.0);
+        fillArc(centerX, centerY, radius, startAngle, endAngle, INKPLATE2_BLACK);
+    }
+
+    // Draw inner white circle to create donut effect
+    display.fillCircle(centerX, centerY, innerRadius, INKPLATE2_WHITE);
+
+    // Draw inner circle outline
+    display.drawCircle(centerX, centerY, innerRadius, INKPLATE2_BLACK);
+
+    // Draw percentage text in center
+    display.setFont(&FreeSans9pt7b);
+    char percentText[10];
+    sprintf(percentText, "%.0f%%", percent);
+
+    int16_t x1, y1;
+    uint16_t w, h;
+    display.getTextBounds(percentText, 0, 0, &x1, &y1, &w, &h);
+
+    display.setTextColor(INKPLATE2_BLACK);
+    display.setCursor(centerX - w / 2, centerY + h / 2);
+    display.print(percentText);
+}
+
+const char* monthAbbrev(int mon) {
+    static const char* months[] = {
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    };
+    return months[mon];
+}
+
+void displayBabyHeader() {
+    char dateStr[8];
+    sprintf(dateStr, "%s %d", monthAbbrev(currentTime.tm_mon), currentTime.tm_mday);
+
+    display.setFont(&FreeSans9pt7b);
+    display.setCursor(6, 18);
+    display.printf("It's %s & %s is:", dateStr, baby_name);
+}
+
 // Birth mode display functions
 void showBirthProgress() {
     int daysSinceBirth = calculateDaysSinceBirth();
@@ -616,13 +702,12 @@ void showBirthProgress() {
     display.clearDisplay();
     display.setTextColor(INKPLATE2_BLACK);
 
+    displayBabyHeader();
     displayDaysOld(daysSinceBirth);
     displayAgeInfo(weeks, months);
 
-    // Show corrected age if baby was born early
-    if (wasBornEarly()) {
-        displayCorrectedAge();
-    }
+    // Circular progress bar for first year
+    displayFirstYearProgress(daysSinceBirth);
 
     display.display();
 }
@@ -631,44 +716,34 @@ void displayDaysOld(int daysOld) {
     char daysText[10];
     sprintf(daysText, "%d", daysOld);
 
+    // Draw the number on the left
     display.setFont(&FreeSansBold24pt7b);
     int16_t x1, y1;
     uint16_t w, h;
     display.getTextBounds(daysText, 0, 0, &x1, &y1, &w, &h);
 
-    int centerX = 45;
-    int numberX = centerX - (w / 2);
+    int numberX = 6;
+    int numberY = 60;
 
-    display.setCursor(numberX, 39);
+    display.setCursor(numberX, numberY);
     display.print(daysText);
 
+    // Draw "days" and "old" stacked to the right of the number
     display.setFont(&FreeSans9pt7b);
-    display.setCursor(15, 54);
-    display.println("days old");
+    int labelX = numberX + w + 10;
+    display.setCursor(labelX, numberY - 18);
+    display.print("days");
+    display.setCursor(labelX, numberY - 4);
+    display.print("old");
 }
 
 void displayAgeInfo(int weeks, int months) {
-    display.setFont(&FreeSans12pt7b);
-    display.setCursor(100, 25);
-    display.printf("%d weeks", weeks);
-
-    display.setFont(&FreeSans12pt7b);
-    display.setCursor(100, 50);
-    if (months == 1) {
-        display.printf("%d month", months);
-    } else {
-        display.printf("%d months", months);
-    }
-}
-
-void displayCorrectedAge() {
-    int correctedDays = calculateCorrectedAgeDays();
-    int correctedWeeks = correctedDays / 7;
-    int correctedMonths = correctedDays / 30;  // Approximate
-
+    // Show weeks and months on separate lines below the days
     display.setFont(&FreeSans9pt7b);
-    display.setCursor(5, 95);
-    display.printf("Corrected: %dw / %dm", correctedWeeks, correctedMonths);
+    display.setCursor(6, 80);
+    display.printf("%d %s", weeks, weeks == 1 ? "week" : "weeks");
+    display.setCursor(6, 96);
+    display.printf("%d %s", months, months == 1 ? "month" : "months");
 }
 
 void ensureWiFiConnected() {

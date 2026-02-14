@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pregometer Simulator</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            background: #333;
+            color: #fff;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 {
+            margin-bottom: 20px;
+        }
+        .controls {
+            background: #444;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        label {
+            font-size: 12px;
+            color: #aaa;
+        }
+        input[type="date"], input[type="text"] {
+            padding: 8px;
+            border-radius: 4px;
+            border: none;
+            font-size: 14px;
+        }
+        .display-frame {
+            background: #000;
+            padding: 20px;
+            border-radius: 8px;
+            display: inline-block;
+        }
+        canvas {
+            border: 2px solid #666;
+            image-rendering: pixelated;
+        }
+        .info {
+            margin-top: 20px;
+            font-size: 14px;
+            color: #aaa;
+        }
+        .mode-indicator {
+            margin-top: 10px;
+            padding: 5px 10px;
+            background: #555;
+            border-radius: 4px;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Pregometer Display Simulator</h1>
+
+        <div class="controls">
+            <div class="control-group">
+                <label>Start Date (LMP)</label>
+                <input type="date" id="startDate">
+            </div>
+            <div class="control-group">
+                <label>Due Date</label>
+                <input type="date" id="dueDate">
+            </div>
+            <div class="control-group">
+                <label>Birth Date (optional)</label>
+                <input type="date" id="birthDate">
+            </div>
+            <div class="control-group">
+                <label>Simulate Date</label>
+                <input type="date" id="currentDate">
+            </div>
+            <div class="control-group">
+                <label>Baby's Name</label>
+                <input type="text" id="babyName" placeholder="Name">
+            </div>
+        </div>
+
+        <div class="display-frame">
+            <canvas id="display" width="424" height="208"></canvas>
+        </div>
+        <div class="mode-indicator" id="modeIndicator">Pregnancy Mode</div>
+
+        <div class="info">
+            <p>Display: 212 x 104 pixels (shown at 2x scale)</p>
+            <p>Colors: Black, White, Red (3-color e-ink)</p>
+        </div>
+    </div>
+
+    <script>
+        // Display constants (actual size)
+        const WIDTH = 212;
+        const HEIGHT = 104;
+        const SCALE = 2;
+        const TOTAL_PREGNANCY_DAYS = 280;
+
+        // Colors matching Inkplate
+        const BLACK = '#000000';
+        const WHITE = '#FFFFFF';
+        const RED = '#FF0000';
+
+        const canvas = document.getElementById('display');
+        const ctx = canvas.getContext('2d');
+
+        // Date inputs
+        const startDateInput = document.getElementById('startDate');
+        const dueDateInput = document.getElementById('dueDate');
+        const birthDateInput = document.getElementById('birthDate');
+        const currentDateInput = document.getElementById('currentDate');
+        const babyNameInput = document.getElementById('babyName');
+        const modeIndicator = document.getElementById('modeIndicator');
+
+        // localStorage helpers
+        function saveToStorage() {
+            const data = {
+                startDate: startDateInput.value,
+                dueDate: dueDateInput.value,
+                birthDate: birthDateInput.value,
+                currentDate: currentDateInput.value,
+                babyName: babyNameInput.value
+            };
+            try {
+                localStorage.setItem('pregometer-simulator', JSON.stringify(data));
+            } catch (e) {
+                // localStorage not available, ignore
+            }
+        }
+
+        function loadFromStorage() {
+            try {
+                const saved = localStorage.getItem('pregometer-simulator');
+                if (saved) {
+                    return JSON.parse(saved);
+                }
+            } catch (e) {
+                // localStorage not available, ignore
+            }
+            return null;
+        }
+
+        // Set default dates
+        function initDefaults() {
+            const saved = loadFromStorage();
+
+            if (saved) {
+                startDateInput.value = saved.startDate || '';
+                dueDateInput.value = saved.dueDate || '';
+                birthDateInput.value = saved.birthDate || '';
+                currentDateInput.value = saved.currentDate || '';
+                babyNameInput.value = saved.babyName || '';
+                return;
+            }
+
+            // No saved data, use defaults
+            const today = new Date();
+            // Default: 20 weeks into pregnancy
+            const startDate = new Date(today);
+            startDate.setDate(startDate.getDate() - 140);
+
+            const dueDate = new Date(startDate);
+            dueDate.setDate(dueDate.getDate() + 280);
+
+            startDateInput.value = formatDate(startDate);
+            dueDateInput.value = formatDate(dueDate);
+            currentDateInput.value = formatDate(today);
+        }
+
+        function formatDate(date) {
+            return date.toISOString().split('T')[0];
+        }
+
+        function parseDate(str) {
+            if (!str) return null;
+            const [year, month, day] = str.split('-').map(Number);
+            return new Date(year, month - 1, day);
+        }
+
+        // Calculation functions (ported from Arduino)
+        function calculateDaysRemaining(currentDate, dueDate) {
+            const diff = dueDate - currentDate;
+            const days = Math.floor(diff / (24 * 3600 * 1000));
+            return Math.max(0, days);
+        }
+
+        function calculateCurrentWeek(currentDate, startDate) {
+            const diff = currentDate - startDate;
+            const days = Math.floor(diff / (24 * 3600 * 1000));
+            const week = Math.floor(days / 7);
+            return Math.max(1, Math.min(40, week));
+        }
+
+        function calculateTrimester(week) {
+            if (week <= 12) return 1;
+            if (week <= 27) return 2;
+            return 3;
+        }
+
+        function calculatePercentComplete(currentDate, startDate) {
+            const diff = currentDate - startDate;
+            const daysPassed = Math.floor(diff / (24 * 3600 * 1000));
+            const percent = (daysPassed / TOTAL_PREGNANCY_DAYS) * 100;
+            return Math.max(0, Math.min(100, percent));
+        }
+
+        function calculateDaysSinceBirth(currentDate, birthDate) {
+            const diff = currentDate - birthDate;
+            const days = Math.floor(diff / (24 * 3600 * 1000));
+            return Math.max(0, days);
+        }
+
+        function calculateWeeksSinceBirth(currentDate, birthDate) {
+            return Math.floor(calculateDaysSinceBirth(currentDate, birthDate) / 7);
+        }
+
+        function calculateMonthsSinceBirth(currentDate, birthDate) {
+            let months = (currentDate.getFullYear() - birthDate.getFullYear()) * 12;
+            months += currentDate.getMonth() - birthDate.getMonth();
+            if (currentDate.getDate() < birthDate.getDate()) {
+                months--;
+            }
+            return Math.max(0, months);
+        }
+
+        function wasBornEarly(birthDate, dueDate) {
+            return birthDate < dueDate;
+        }
+
+        function calculateCorrectedAgeDays(currentDate, birthDate, dueDate) {
+            const daysEarly = Math.floor((dueDate - birthDate) / (24 * 3600 * 1000));
+            if (daysEarly <= 0) {
+                return calculateDaysSinceBirth(currentDate, birthDate);
+            }
+            const corrected = calculateDaysSinceBirth(currentDate, birthDate) - daysEarly;
+            return Math.max(0, corrected);
+        }
+
+        function isPostBirthMode(currentDate, dueDate, birthDate) {
+            if (birthDate) return true;
+            return currentDate > dueDate;
+        }
+
+        // Drawing functions
+        function clearDisplay() {
+            ctx.fillStyle = WHITE;
+            ctx.fillRect(0, 0, WIDTH * SCALE, HEIGHT * SCALE);
+        }
+
+        function setFont(size, bold = false) {
+            const weight = bold ? 'bold' : 'normal';
+            ctx.font = `${weight} ${size * SCALE}px FreeSans`;
+        }
+
+        function drawText(text, x, y, color = BLACK) {
+            ctx.fillStyle = color;
+            ctx.fillText(text, x * SCALE, y * SCALE);
+        }
+
+        function measureText(text) {
+            const metrics = ctx.measureText(text);
+            return {
+                width: metrics.width / SCALE,
+                height: parseInt(ctx.font) / SCALE
+            };
+        }
+
+        function drawRect(x, y, w, h, color) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = SCALE;
+            ctx.strokeRect(x * SCALE, y * SCALE, w * SCALE, h * SCALE);
+        }
+
+        function fillRect(x, y, w, h, color) {
+            ctx.fillStyle = color;
+            ctx.fillRect(x * SCALE, y * SCALE, w * SCALE, h * SCALE);
+        }
+
+        // Display components
+        function displayDaysRemaining(daysRemaining) {
+            const daysText = String(daysRemaining);
+
+            setFont(32, true);
+            const m = measureText(daysText);
+            const centerX = 45;
+            const numberX = centerX - (m.width / 2);
+
+            drawText(daysText, numberX, 39);
+
+            setFont(12);
+            drawText('days left', 15, 54);
+        }
+
+        function formatShortDate(date) {
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                            'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            return `${months[date.getMonth()]} ${date.getDate()}`;
+        }
+
+        function displayCurrentDate(currentDate) {
+            setFont(12);
+            const dateStr = formatShortDate(currentDate);
+            const m = measureText(dateStr);
+            drawText(dateStr, WIDTH - m.width - 4, 12);
+        }
+
+        function displayWeekInfo(currentWeek, currentTrimester) {
+            setFont(16);
+            drawText(`Week ${currentWeek}`, 100, 25);
+
+            setFont(12);
+            drawText(`Trimester ${currentTrimester}`, 100, 40);
+        }
+
+        function displayProgressBar(percentComplete) {
+            const barWidth = 198;
+            const barHeight = 30;
+            const barX = 5;
+            const barY = 70;
+
+            // Draw outline
+            drawRect(barX, barY, barWidth, barHeight, BLACK);
+
+            // Calculate fill
+            const fillWidth = Math.floor((barWidth - 2) * percentComplete / 100);
+
+            // Fill progress
+            if (fillWidth > 0) {
+                fillRect(barX + 1, barY + 1, fillWidth, barHeight - 2, BLACK);
+            }
+
+            // Draw percentage text
+            setFont(12);
+            const percentText = `${Math.round(percentComplete)}%`;
+            const m = measureText(percentText);
+            const textX = barX + (barWidth - m.width) / 2;
+            const textY = barY + (barHeight + 12) / 2;
+
+            const fillRight = barX + 1 + fillWidth;
+            const textRight = textX + m.width;
+
+            if (fillWidth === 0) {
+                drawText(percentText, textX, textY, BLACK);
+            } else if (textRight <= fillRight) {
+                drawText(percentText, textX, textY, WHITE);
+            } else if (textX >= fillRight) {
+                drawText(percentText, textX, textY, BLACK);
+            } else {
+                // Text spans both - simplified: just use white if mostly filled
+                drawText(percentText, textX, textY, fillWidth > barWidth/2 ? WHITE : BLACK);
+            }
+        }
+
+        function displayBabyHeader(currentDate) {
+            const dateStr = formatShortDate(currentDate);
+            const name = babyNameInput.value;
+            setFont(9);
+            drawText(`It's ${dateStr} & ${name} is:`, 6, 16);
+        }
+
+        function displayDaysOld(daysOld) {
+            const daysText = String(daysOld);
+
+            // Draw the number on the left
+            setFont(32, true);
+            const m = measureText(daysText);
+            const numberX = 10;
+            const numberY = 54;
+
+            drawText(daysText, numberX, numberY);
+
+            // Draw "days" and "old" stacked to the right of the number
+            setFont(12);
+            const labelX = numberX + m.width + 10;
+            drawText('days', labelX, numberY - 18);
+            drawText('old', labelX, numberY - 4);
+        }
+
+        function displayAgeInfo(weeks, months) {
+            // Show weeks and months on separate lines below the days
+            setFont(12);
+            const weeksText = weeks === 1 ? `${weeks} week` : `${weeks} weeks`;
+            const monthsText = months === 1 ? `${months} month` : `${months} months`;
+            drawText(weeksText, 10, 76);
+            drawText(monthsText, 10, 92);
+        }
+
+        function displayCorrectedAge(correctedDays) {
+            const correctedWeeks = Math.floor(correctedDays / 7);
+            const correctedMonths = Math.floor(correctedDays / 30);
+
+            setFont(8);
+            const weeksText = correctedWeeks === 1 ? `${correctedWeeks} week` : `${correctedWeeks} weeks`;
+            const monthsText = correctedMonths === 1 ? `${correctedMonths} month` : `${correctedMonths} months`;
+            drawText(`(${weeksText} / ${monthsText})`, 10, 78);
+        }
+
+        function displayFirstYearProgress(daysSinceBirth) {
+            const DAYS_IN_YEAR = 365;
+            const percent = Math.min(100, (daysSinceBirth / DAYS_IN_YEAR) * 100);
+
+            // Circle parameters - positioned on right side
+            const centerX = 170;
+            const centerY = 62;
+            const radius = 36;
+            const innerRadius = 24;
+
+            // Draw background circle (outline)
+            ctx.beginPath();
+            ctx.arc(centerX * SCALE, centerY * SCALE, radius * SCALE, 0, Math.PI * 2);
+            ctx.strokeStyle = BLACK;
+            ctx.lineWidth = SCALE;
+            ctx.stroke();
+
+            // Draw filled arc (clock-style, starting from 12 o'clock)
+            if (percent > 0) {
+                const startAngle = -Math.PI / 2; // 12 o'clock
+                const endAngle = startAngle + (Math.PI * 2 * percent / 100);
+
+                ctx.beginPath();
+                ctx.moveTo(centerX * SCALE, centerY * SCALE);
+                ctx.arc(centerX * SCALE, centerY * SCALE, radius * SCALE, startAngle, endAngle);
+                ctx.closePath();
+                ctx.fillStyle = BLACK;
+                ctx.fill();
+            }
+
+            // Draw inner white circle to create donut effect
+            ctx.beginPath();
+            ctx.arc(centerX * SCALE, centerY * SCALE, innerRadius * SCALE, 0, Math.PI * 2);
+            ctx.fillStyle = WHITE;
+            ctx.fill();
+
+            // Draw inner circle outline
+            ctx.beginPath();
+            ctx.arc(centerX * SCALE, centerY * SCALE, innerRadius * SCALE, 0, Math.PI * 2);
+            ctx.strokeStyle = BLACK;
+            ctx.lineWidth = SCALE;
+            ctx.stroke();
+
+            // Draw percentage text in center
+            setFont(12, true);
+            const percentText = `${Math.round(percent)}%`;
+            const m = measureText(percentText);
+            drawText(percentText, centerX - m.width / 2, centerY + 5, BLACK);
+        }
+
+        // Main render function
+        function render() {
+            const startDate = parseDate(startDateInput.value);
+            const dueDate = parseDate(dueDateInput.value);
+            const birthDate = parseDate(birthDateInput.value);
+            const currentDate = parseDate(currentDateInput.value);
+
+            if (!startDate || !dueDate || !currentDate) {
+                clearDisplay();
+                setFont(14);
+                drawText('Configure dates...', 20, 50);
+                return;
+            }
+
+            clearDisplay();
+
+            const postBirth = isPostBirthMode(currentDate, dueDate, birthDate);
+            modeIndicator.textContent = postBirth ? 'Birth Mode' : 'Pregnancy Mode';
+            modeIndicator.style.background = postBirth ? '#a55' : '#555';
+
+            if (postBirth) {
+                const effectiveBirth = birthDate || dueDate;
+                const daysSinceBirth = calculateDaysSinceBirth(currentDate, effectiveBirth);
+                const weeks = calculateWeeksSinceBirth(currentDate, effectiveBirth);
+                const months = calculateMonthsSinceBirth(currentDate, effectiveBirth);
+
+                displayBabyHeader(currentDate);
+                displayDaysOld(daysSinceBirth);
+                displayAgeInfo(weeks, months);
+
+                // Circular progress bar for first year
+                displayFirstYearProgress(daysSinceBirth);
+            } else {
+                const daysRemaining = calculateDaysRemaining(currentDate, dueDate);
+                const currentWeek = calculateCurrentWeek(currentDate, startDate);
+                const currentTrimester = calculateTrimester(currentWeek);
+                const percentComplete = calculatePercentComplete(currentDate, startDate);
+
+                displayCurrentDate(currentDate);
+                displayDaysRemaining(daysRemaining);
+                displayWeekInfo(currentWeek, currentTrimester);
+                displayProgressBar(percentComplete);
+            }
+        }
+
+        // Event listeners
+        function onDateChange() {
+            saveToStorage();
+            render();
+        }
+        startDateInput.addEventListener('change', onDateChange);
+        dueDateInput.addEventListener('change', onDateChange);
+        birthDateInput.addEventListener('change', onDateChange);
+        currentDateInput.addEventListener('change', onDateChange);
+        babyNameInput.addEventListener('input', onDateChange);
+
+        // Initialize
+        initDefaults();
+        render();
+    </script>
+</body>
+</html>
