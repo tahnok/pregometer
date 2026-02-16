@@ -30,7 +30,6 @@
 #include "FreeSans9pt7b.h"
 #include "FreeSans12pt7b.h"
 #include "FreeSans18pt7b.h"
-#include "FreeSansBold9pt7b.h"
 #include "FreeSansBold24pt7b.h"
 
 Inkplate display;
@@ -78,13 +77,17 @@ void loadConfig() {
                 auto deserializeError = deserializeJson(json, buf.get());
                 if (!deserializeError) {
                     Serial.println("parsed json");
-                    strcpy(start_date, json["start_date"]);
-                    strcpy(due_date, json["due_date"]);
+                    strncpy(start_date, json["start_date"] | "", sizeof(start_date) - 1);
+                    start_date[sizeof(start_date) - 1] = '\0';
+                    strncpy(due_date, json["due_date"] | "", sizeof(due_date) - 1);
+                    due_date[sizeof(due_date) - 1] = '\0';
                     if (json.containsKey("birth_date")) {
-                        strcpy(birth_date, json["birth_date"]);
+                        strncpy(birth_date, json["birth_date"] | "", sizeof(birth_date) - 1);
+                        birth_date[sizeof(birth_date) - 1] = '\0';
                     }
                     if (json.containsKey("baby_name")) {
-                        strcpy(baby_name, json["baby_name"]);
+                        strncpy(baby_name, json["baby_name"] | "", sizeof(baby_name) - 1);
+                        baby_name[sizeof(baby_name) - 1] = '\0';
                     }
                 } else {
                     Serial.println("failed to load json config");
@@ -150,8 +153,10 @@ bool isPostBirthMode() {
         return true;
     }
     // Auto-switch if current date is past due date
-    time_t now = mktime(&currentTime);
-    time_t due = mktime(&dueDate);
+    struct tm ct = currentTime;
+    struct tm dd = dueDate;
+    time_t now = mktime(&ct);
+    time_t due = mktime(&dd);
     return difftime(now, due) > 0;
 }
 
@@ -263,7 +268,7 @@ void setup() {
     parseDateStrings();
 
     if (isFirstRun()) {
-        setupDailyAlarm();
+        setupRTC();
     }
 
     updateDisplay();
@@ -271,26 +276,6 @@ void setup() {
 
 void loop() {
     // Empty - everything happens in setup() due to deep sleep
-}
-
-void setupDailyAlarm() {
-    syncTime();
-    setupRTC();
-
-    struct tm alarmTime = calculateNextAlarmTime();
-    double secondsUntilAlarm = rtc.setAlarm(alarmTime, RTC_DHHMMSS);
-
-    if (secondsUntilAlarm > 0) {
-        if (isPostBirthMode()) {
-            showBirthProgress();
-        } else {
-            showPregnancyProgress();
-        }
-        deepSleep();
-    } else {
-        showErrorMessage("Could not set alarm");
-        deepSleep();
-    }
 }
 
 void updateDisplay() {
@@ -396,8 +381,10 @@ void displayProgressBar(float percentComplete) {
 
 
 int calculateDaysRemaining() {
-    time_t now = mktime(&currentTime);
-    time_t due = mktime(&dueDate);
+    struct tm ct = currentTime;
+    struct tm dd = dueDate;
+    time_t now = mktime(&ct);
+    time_t due = mktime(&dd);
     
     double diffSeconds = difftime(due, now);
     int diffDays = (int)(diffSeconds / (24 * 3600));
@@ -406,8 +393,10 @@ int calculateDaysRemaining() {
 }
 
 int calculateCurrentWeek() {
-    time_t now = mktime(&currentTime);
-    time_t start = mktime(&startDate);
+    struct tm ct = currentTime;
+    struct tm sd = startDate;
+    time_t now = mktime(&ct);
+    time_t start = mktime(&sd);
     
     double diffSeconds = difftime(now, start);
     int diffDays = (int)(diffSeconds / (24 * 3600));
@@ -423,8 +412,10 @@ int calculateTrimester(int week) {
 }
 
 float calculatePercentComplete() {
-    time_t now = mktime(&currentTime);
-    time_t start = mktime(&startDate);
+    struct tm ct = currentTime;
+    struct tm sd = startDate;
+    time_t now = mktime(&ct);
+    time_t start = mktime(&sd);
 
     double diffSeconds = difftime(now, start);
     int daysPassed = (int)(diffSeconds / (24 * 3600));
@@ -436,7 +427,8 @@ float calculatePercentComplete() {
 // Birth mode age calculation functions
 int calculateDaysSinceBirth() {
     struct tm effectiveBirth = getEffectiveBirthDate();
-    time_t now = mktime(&currentTime);
+    struct tm ct = currentTime;
+    time_t now = mktime(&ct);
     time_t birth = mktime(&effectiveBirth);
 
     double diffSeconds = difftime(now, birth);
@@ -467,8 +459,9 @@ int calculateMonthsSinceBirth() {
 int calculateCorrectedAgeDays() {
     // Corrected age = chronological age - (due date - birth date)
     struct tm effectiveBirth = getEffectiveBirthDate();
+    struct tm dd = dueDate;
     time_t birth = mktime(&effectiveBirth);
-    time_t due = mktime(&dueDate);
+    time_t due = mktime(&dd);
 
     // Days early = due date - birth date
     double earlySeconds = difftime(due, birth);
@@ -485,25 +478,28 @@ int calculateCorrectedAgeDays() {
 
 bool wasBornEarly() {
     struct tm effectiveBirth = getEffectiveBirthDate();
+    struct tm dd = dueDate;
     time_t birth = mktime(&effectiveBirth);
-    time_t due = mktime(&dueDate);
+    time_t due = mktime(&dd);
 
     return difftime(due, birth) > 0;
 }
 
 
 void setNextDailyAlarm() {
-    struct tm alarmTime = {0};
+    struct tm alarmTime = currentTime;
     alarmTime.tm_hour = WAKE_HOUR;
     alarmTime.tm_min = WAKE_MINUTE;
     alarmTime.tm_sec = 0;
-    alarmTime.tm_mday = currentTime.tm_mday + 1;
-    alarmTime.tm_mon = currentTime.tm_mon;
-    
+    alarmTime.tm_mday += 1;
+    mktime(&alarmTime); // Normalize to handle month/year rollover
+
     rtc.setAlarm(alarmTime, RTC_DHHMMSS);
 }
 
 void deepSleep() {
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
     esp_deep_sleep_start();
 }
 
@@ -555,32 +551,6 @@ void syncTime() {
 
 void setupRTC() {
     rtc.setTimezone(TIMEZONE_OFFSET);
-}
-
-struct tm calculateNextAlarmTime() {
-    struct tm alarmTime = {0};
-    alarmTime.tm_hour = WAKE_HOUR;
-    alarmTime.tm_min = WAKE_MINUTE;
-    alarmTime.tm_sec = 0;
-    
-    if (currentTime.tm_hour > WAKE_HOUR || 
-        (currentTime.tm_hour == WAKE_HOUR && currentTime.tm_min >= WAKE_MINUTE)) {
-        alarmTime.tm_mday = currentTime.tm_mday + 1;
-        alarmTime.tm_mon = currentTime.tm_mon;
-    } else {
-        alarmTime.tm_mday = currentTime.tm_mday;
-        alarmTime.tm_mon = currentTime.tm_mon;
-    }
-    
-    return alarmTime;
-}
-
-void showErrorMessage(const char* message) {
-    display.setTextColor(INKPLATE2_BLACK);
-    display.setCursor(10, 20);
-    display.setTextSize(1);
-    display.println(message);
-    display.display();
 }
 
 void displayDaysRemaining(int daysRemaining) {
@@ -690,7 +660,7 @@ void displayBabyHeader() {
 
     display.setFont(&FreeSans9pt7b);
     display.setCursor(6, 18);
-    display.printf("It's %s & %s is:", dateStr, baby_name);
+    display.printf("%s, %s is:", dateStr, baby_name);
 }
 
 // Birth mode display functions

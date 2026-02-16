@@ -52,8 +52,6 @@ void Network::getTime(tm *t)
     // Get seconds since 1.1.1970.
     time_t nowSecs = time(nullptr) + timezone * 3600ULL;
 
-    // Used to store time
-    struct tm timeinfo;
     gmtime_r(&nowSecs, t);
 
 }
