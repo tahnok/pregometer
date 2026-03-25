@@ -192,48 +192,35 @@ bool checkForReconfigureCommand() {
     return false;
 }
 
-void configureWiFiAndDates() {
-    // Configure WiFi using WiFiManager with custom parameters
+// Sets up WiFiManager with date parameters, calls connectFunc to
+// either force the portal or try saved creds first, then saves config.
+bool runWiFiManager(bool (*connectFunc)(WiFiManager&)) {
     WiFiManager wifiManager;
     wifiManager.setSaveConfigCallback(saveConfigCallback);
-    
-    // Force configuration portal to open - don't use saved credentials
-    wifiManager.resetSettings();
-    
-    // Set timeout to give user more time to configure
     wifiManager.setConfigPortalTimeout(300); // 5 minutes
-    
-    // Custom parameters for pregnancy dates
+
     WiFiManagerParameter custom_start_date("start_date", "Start Date (YYYY-MM-DD)", start_date, 11);
     WiFiManagerParameter custom_due_date("due_date", "Due Date (YYYY-MM-DD)", due_date, 11);
     WiFiManagerParameter custom_birth_date("birth_date", "Birth Date (YYYY-MM-DD, optional)", birth_date, 11);
     WiFiManagerParameter custom_baby_name("baby_name", "Baby's Name", baby_name, 32);
 
-    // Add parameters to WiFiManager
     wifiManager.addParameter(&custom_start_date);
     wifiManager.addParameter(&custom_due_date);
     wifiManager.addParameter(&custom_birth_date);
     wifiManager.addParameter(&custom_baby_name);
-    
-    Serial.println("Starting WiFi configuration portal...");
-    Serial.println("Connect to 'Pregometer-Setup' WiFi and go to 192.168.4.1");
-    Serial.println("Enter your WiFi credentials and pregnancy dates");
-    
-    // Use startConfigPortal instead of autoConnect to force portal mode
-    if (!wifiManager.startConfigPortal("Pregometer-Setup")) {
-        Serial.println("Failed to connect or configure - will retry");
-        return; // Don't restart, just return and try again
+
+    if (!connectFunc(wifiManager)) {
+        Serial.println("WiFiManager: failed to connect");
+        return false;
     }
-    
+
     Serial.println("WiFi connected");
-    
-    // Get custom parameters
+
     strcpy(start_date, custom_start_date.getValue());
     strcpy(due_date, custom_due_date.getValue());
     strcpy(birth_date, custom_birth_date.getValue());
     strcpy(baby_name, custom_baby_name.getValue());
 
-    // Log the configured dates
     Serial.print("Start date: ");
     Serial.println(start_date);
     Serial.print("Due date: ");
@@ -242,11 +229,26 @@ void configureWiFiAndDates() {
     Serial.println(birth_date);
     Serial.print("Baby name: ");
     Serial.println(baby_name);
-    
-    // Save configuration if changed
+
     if (shouldSaveConfig) {
         saveConfig();
     }
+    return true;
+}
+
+bool wifiForcePortal(WiFiManager& wm) {
+    Serial.println("Opening config portal (Pregometer-Setup)...");
+    wm.resetSettings();
+    return wm.startConfigPortal("Pregometer-Setup");
+}
+
+bool wifiAutoConnect(WiFiManager& wm) {
+    Serial.println("Trying saved WiFi, falling back to config portal...");
+    return wm.autoConnect("Pregometer-Setup");
+}
+
+void configureWiFiAndDates() {
+    runWiFiManager(wifiForcePortal);
 }
 
 void setup() {
@@ -297,20 +299,32 @@ void showWiFiError() {
     display.clearDisplay();
     display.setTextColor(INKPLATE2_BLACK);
 
+    String failedSSID = WiFi.SSID();
+
     display.setFont(&FreeSans12pt7b);
-    display.setCursor(20, 40);
+    display.setCursor(20, 30);
     display.print("No WiFi");
 
     display.setFont(&FreeSans9pt7b);
-    display.setCursor(20, 65);
-    display.print("Retrying in 1 hour");
+    if (failedSSID.length() > 0) {
+        display.setCursor(20, 50);
+        display.printf("Can't reach %s", failedSSID.c_str());
+    }
+    display.setCursor(20, 72);
+    display.print("Connect to");
+    display.setCursor(20, 89);
+    display.print("Pregometer-Setup");
 
     display.display();
 
-    // No valid time, so we can't set a proper daily alarm.
-    // Set a 1-hour retry timer instead.
+    // Try saved creds first, fall back to config portal for 5 minutes
+    if (runWiFiManager(wifiAutoConnect)) {
+        ESP.restart();
+    }
+
+    // Portal timed out — retry in 1 hour
+    Serial.println("Config portal timed out, retrying in 1 hour");
     esp_sleep_enable_timer_wakeup(3600ULL * 1000000ULL);
-    Serial.println("No NTP time available, retrying in 1 hour");
 }
 
 void showPregnancyProgress() {
