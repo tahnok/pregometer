@@ -279,7 +279,11 @@ void loop() {
 }
 
 void updateDisplay() {
-    syncTime();
+    if (!syncTime()) {
+        showWiFiError();
+        deepSleep();
+        return;
+    }
     if (isPostBirthMode()) {
         showBirthProgress();
     } else {
@@ -287,6 +291,26 @@ void updateDisplay() {
     }
     setNextDailyAlarm();
     deepSleep();
+}
+
+void showWiFiError() {
+    display.clearDisplay();
+    display.setTextColor(INKPLATE2_BLACK);
+
+    display.setFont(&FreeSans12pt7b);
+    display.setCursor(20, 40);
+    display.print("No WiFi");
+
+    display.setFont(&FreeSans9pt7b);
+    display.setCursor(20, 65);
+    display.print("Retrying in 1 hour");
+
+    display.display();
+
+    // No valid time, so we can't set a proper daily alarm.
+    // Set a 1-hour retry timer instead.
+    esp_sleep_enable_timer_wakeup(3600ULL * 1000000ULL);
+    Serial.println("No NTP time available, retrying in 1 hour");
 }
 
 void showPregnancyProgress() {
@@ -543,10 +567,23 @@ bool isFirstRun() {
     return esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER;
 }
 
-void syncTime() {
-    ensureWiFiConnected();
-    network.setTime(TIMEZONE_OFFSET);
-    network.getTime(&currentTime);
+bool syncTime() {
+    if (ensureWiFiConnected()) {
+        network.setTime(TIMEZONE_OFFSET);
+        network.getTime(&currentTime);
+        return true;
+    }
+
+    // WiFi failed — on timer wake-ups the ESP32 RTC still has a roughly
+    // correct time from the last NTP sync, so just use it.
+    if (!isFirstRun()) {
+        Serial.println("WiFi failed, using ESP32 RTC time");
+        network.getTime(&currentTime);
+        return true;
+    }
+
+    // First boot with no prior NTP sync — time is meaningless
+    return false;
 }
 
 void setupRTC() {
@@ -716,22 +753,26 @@ void displayAgeInfo(int weeks, int months) {
     display.printf("%d %s", months, months == 1 ? "month" : "months");
 }
 
-void ensureWiFiConnected() {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("WiFi not connected, attempting to reconnect...");
-        WiFi.begin();
-        
-        int attempts = 0;
-        while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-            delay(500);
-            Serial.print(".");
-            attempts++;
-        }
-        
-        if (WiFi.status() == WL_CONNECTED) {
-            Serial.println("\nWiFi reconnected");
-        } else {
-            Serial.println("\nFailed to reconnect to WiFi");
-        }
+bool ensureWiFiConnected() {
+    if (WiFi.status() == WL_CONNECTED) {
+        return true;
     }
+
+    Serial.println("WiFi not connected, attempting to reconnect...");
+    WiFi.begin();
+
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+        delay(500);
+        Serial.print(".");
+        attempts++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\nWiFi reconnected");
+        return true;
+    }
+
+    Serial.println("\nFailed to reconnect to WiFi");
+    return false;
 }
