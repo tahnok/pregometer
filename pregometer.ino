@@ -42,6 +42,23 @@ const int WAKE_MINUTE = 0;
 const int TOTAL_PREGNANCY_DAYS = 280;
 const int TIMEZONE_OFFSET = -3;
 
+// Debug boot log - shows progress on eInk display
+// Set to false to disable debug overlay
+const bool DEBUG_BOOT = false;
+int debugLine = 0;
+
+void debugStatus(const char* msg) {
+    if (!DEBUG_BOOT) return;
+    Serial.println(msg);
+    display.setFont(NULL); // built-in 5x7 font
+    display.setTextSize(1);
+    display.setTextColor(INKPLATE2_BLACK);
+    display.setCursor(2, 2 + debugLine * 10);
+    display.print(msg);
+    display.display();
+    debugLine++;
+}
+
 // Configuration variables
 char start_date[11] = "";
 char due_date[11] = "";
@@ -128,6 +145,65 @@ void saveConfig() {
     }
 }
 
+// Boot stats - persisted to SPIFFS
+struct BootStats {
+    int boots;
+    int wifi_ok;
+    int wifi_fail;
+    int ntp_ok;
+    int ntp_fail;
+    int alarm_ok;
+    int alarm_fail;
+    char last_boot[20];   // YYYY-MM-DD HH:MM:SS
+    int last_wifi_rssi;
+};
+
+BootStats stats = {0};
+
+void loadStats() {
+    if (!SPIFFS.exists("/stats.json")) return;
+    fs::File f = SPIFFS.open("/stats.json", "r");
+    if (!f) return;
+    DynamicJsonDocument json(512);
+    if (deserializeJson(json, f)) { f.close(); return; }
+    f.close();
+    stats.boots = json["boots"] | 0;
+    stats.wifi_ok = json["wifi_ok"] | 0;
+    stats.wifi_fail = json["wifi_fail"] | 0;
+    stats.ntp_ok = json["ntp_ok"] | 0;
+    stats.ntp_fail = json["ntp_fail"] | 0;
+    stats.alarm_ok = json["alarm_ok"] | 0;
+    stats.alarm_fail = json["alarm_fail"] | 0;
+    stats.last_wifi_rssi = json["rssi"] | 0;
+    strncpy(stats.last_boot, json["last_boot"] | "", sizeof(stats.last_boot) - 1);
+}
+
+void saveStats() {
+    DynamicJsonDocument json(512);
+    json["boots"] = stats.boots;
+    json["wifi_ok"] = stats.wifi_ok;
+    json["wifi_fail"] = stats.wifi_fail;
+    json["ntp_ok"] = stats.ntp_ok;
+    json["ntp_fail"] = stats.ntp_fail;
+    json["alarm_ok"] = stats.alarm_ok;
+    json["alarm_fail"] = stats.alarm_fail;
+    json["rssi"] = stats.last_wifi_rssi;
+    json["last_boot"] = stats.last_boot;
+    fs::File f = SPIFFS.open("/stats.json", "w");
+    if (f) { serializeJson(json, f); f.close(); }
+}
+
+void printStats() {
+    Serial.println("\n=== Boot Stats ===");
+    Serial.printf("  boots:     %d\n", stats.boots);
+    Serial.printf("  wifi:      %d ok / %d fail\n", stats.wifi_ok, stats.wifi_fail);
+    Serial.printf("  ntp:       %d ok / %d fail\n", stats.ntp_ok, stats.ntp_fail);
+    Serial.printf("  alarm:     %d ok / %d fail\n", stats.alarm_ok, stats.alarm_fail);
+    Serial.printf("  last rssi: %d dBm\n", stats.last_wifi_rssi);
+    Serial.printf("  last boot: %s\n", stats.last_boot);
+    Serial.println("==================\n");
+}
+
 void parseDateString(const char* dateStr, struct tm* date) {
     int year, month, day;
     sscanf(dateStr, "%d-%d-%d", &year, &month, &day);
@@ -169,7 +245,7 @@ struct tm getEffectiveBirthDate() {
 }
 
 bool checkForReconfigureCommand() {
-    Serial.println("Send 'RECONFIGURE' within 30 seconds to change dates...");
+    Serial.println("Send 'RECONFIGURE' or 'STATS' within 30 seconds...");
     unsigned long startTime = millis();
     String input = "";
 
@@ -180,6 +256,9 @@ bool checkForReconfigureCommand() {
                 if (input.equalsIgnoreCase("RECONFIGURE")) {
                     Serial.println("Reconfiguration requested!");
                     return true;
+                }
+                if (input.equalsIgnoreCase("STATS")) {
+                    printStats();
                 }
                 input = "";
             } else {
@@ -256,19 +335,25 @@ void setup() {
     delay(100); // Give serial time to initialize
     initializeDisplay();
 
+    debugStatus(isFirstRun() ? "BOOT: power on" : "BOOT: timer wakeup");
+
     // Only check for reconfigure command on manual reset/power-on (not timer wake-up)
     // Timer wake-ups are unattended battery operation - no point waiting for serial
     if (isFirstRun()) {
         forceReconfigure = checkForReconfigureCommand();
     }
 
+    debugStatus("CONFIG: loading...");
     if (!ensureDatesConfigured()) {
-        Serial.println("Failed to configure dates");
+        debugStatus("CONFIG: FAILED");
         return;
     }
 
-    parseDateStrings();
+    loadStats();
+    stats.boots++;
+    debugStatus("CONFIG: ok");
 
+    parseDateStrings();
     setupRTC();
 
     updateDisplay();
@@ -279,11 +364,15 @@ void loop() {
 }
 
 void updateDisplay() {
+    debugStatus("WIFI: connecting...");
     if (!syncTime()) {
+        debugStatus("WIFI/NTP: FAILED");
         showWiFiError();
         deepSleep();
         return;
     }
+    debugStatus("NTP: ok");
+    debugLine = 0; // reset for next boot
     if (isPostBirthMode()) {
         showBirthProgress();
     } else {
@@ -530,7 +619,13 @@ void setNextDailyAlarm() {
     alarmTime.tm_mday = currentTime.tm_mday + 1;
     alarmTime.tm_mon = currentTime.tm_mon;
 
-    rtc.setAlarm(alarmTime, RTC_DHHMMSS);
+    double result = rtc.setAlarm(alarmTime, RTC_DHHMMSS);
+    if (result > 0) {
+        stats.alarm_ok++;
+    } else {
+        stats.alarm_fail++;
+    }
+    saveStats();
 }
 
 void deepSleep() {
@@ -580,15 +675,30 @@ bool isFirstRun() {
 }
 
 bool syncTime() {
-    if (ensureWiFiConnected() && network.setTime(TIMEZONE_OFFSET)) {
-        network.getTime(&currentTime);
-        return true;
+    bool wifiOk = ensureWiFiConnected();
+    if (wifiOk) {
+        stats.wifi_ok++;
+        stats.last_wifi_rssi = WiFi.RSSI();
+        if (network.setTime(TIMEZONE_OFFSET)) {
+            stats.ntp_ok++;
+            network.getTime(&currentTime);
+            snprintf(stats.last_boot, sizeof(stats.last_boot),
+                "%04d-%02d-%02d %02d:%02d:%02d",
+                currentTime.tm_year+1900, currentTime.tm_mon+1, currentTime.tm_mday,
+                currentTime.tm_hour, currentTime.tm_min, currentTime.tm_sec);
+            saveStats();
+            return true;
+        }
+        stats.ntp_fail++;
+    } else {
+        stats.wifi_fail++;
     }
+    saveStats();
 
-    // WiFi failed — on timer wake-ups the ESP32 RTC still has a roughly
+    // WiFi or NTP failed — on timer wake-ups the ESP32 RTC still has a roughly
     // correct time from the last NTP sync, so just use it.
     if (!isFirstRun()) {
-        Serial.println("WiFi failed, using ESP32 RTC time");
+        Serial.println("WiFi/NTP failed, using ESP32 RTC time");
         network.getTime(&currentTime);
         return true;
     }
