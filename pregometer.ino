@@ -269,9 +269,7 @@ void setup() {
 
     parseDateStrings();
 
-    if (isFirstRun()) {
-        setupRTC();
-    }
+    setupRTC();
 
     updateDisplay();
 }
@@ -525,12 +523,12 @@ bool wasBornEarly() {
 
 
 void setNextDailyAlarm() {
-    struct tm alarmTime = currentTime;
+    struct tm alarmTime = {0};
     alarmTime.tm_hour = WAKE_HOUR;
     alarmTime.tm_min = WAKE_MINUTE;
     alarmTime.tm_sec = 0;
-    alarmTime.tm_mday += 1;
-    mktime(&alarmTime); // Normalize to handle month/year rollover
+    alarmTime.tm_mday = currentTime.tm_mday + 1;
+    alarmTime.tm_mon = currentTime.tm_mon;
 
     rtc.setAlarm(alarmTime, RTC_DHHMMSS);
 }
@@ -582,8 +580,7 @@ bool isFirstRun() {
 }
 
 bool syncTime() {
-    if (ensureWiFiConnected()) {
-        network.setTime(TIMEZONE_OFFSET);
+    if (ensureWiFiConnected() && network.setTime(TIMEZONE_OFFSET)) {
         network.getTime(&currentTime);
         return true;
     }

@@ -57,19 +57,25 @@ void Network::getTime(tm *t)
 }
 
 // Function for initial time setting ovet the ntp server
-void Network::setTime(int timeZone)
+bool Network::setTime(int timeZone)
 {
     // Used for setting correct time
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
 
     Serial.print(F("Waiting for NTP time sync: "));
     time_t nowSecs = time(nullptr);
+    int attempts = 0;
     while (nowSecs < 8 * 3600 * 2)
     {
         delay(500);
         Serial.print(F("."));
         yield();
         nowSecs = time(nullptr);
+        if (++attempts > 20)
+        {
+            Serial.println(F("\nNTP sync timed out"));
+            return false;
+        }
     }
 
     // Add timeZone
@@ -87,5 +93,5 @@ void Network::setTime(int timeZone)
     Serial.print(F("Current time: "));
     Serial.print(asctime(&timeinfo));
 
-    
+    return true;
 }

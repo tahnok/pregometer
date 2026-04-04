@@ -31,7 +31,7 @@ class Network
     // Functions we can access in main file
     void begin(char *ssid, char *pass);
     void getTime(tm *t);
-    void setTime(int timeZone);
+    bool setTime(int timeZone);
 
   private:
     int timezone = 0;
